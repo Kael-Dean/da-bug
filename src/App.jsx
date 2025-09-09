@@ -1,20 +1,25 @@
+// src/App.jsx
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom"
 import AppLayout from "./components/AppLayout"
 import Home from "./pages/Home"
+import Setting from "./pages/setting" // หน้า Setting ที่สร้างไว้
 
 function App() {
   return (
     <HashRouter>
       <Routes>
-        {/* เด้งกลับหน้าแรกถ้าเข้า /index.html ตรง ๆ */}
+        {/* กันกรณีเปิด /index.html ตรง ๆ (แม้ใช้ HashRouter ส่วนใหญ่จะมาที่ #/ อยู่แล้ว) */}
         <Route path="/index.html" element={<Navigate to="/" replace />} />
 
-        {/* ใช้ AppLayout เป็น layout หลัก */}
+        {/* เส้นทางหลักใช้ AppLayout ครอบ */}
         <Route path="/" element={<AppLayout />}>
-          {/* หน้าเริ่มต้นใต้ Layout */}
+          {/* หน้าแรก */}
           <Route index element={<Home />} />
-          {/* /home ก็ยังใช้ได้ */}
+          {/* alias: /home */}
           <Route path="home" element={<Home />} />
+
+          {/* หน้า Setting สำหรับตั้งค่าเกณฑ์แจ้งเตือน + อีเมลผู้รับ */}
+          <Route path="settings" element={<Setting />} />
         </Route>
 
         {/* กันพิมพ์พาธมั่ว */}
