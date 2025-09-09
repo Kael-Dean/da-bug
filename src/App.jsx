@@ -3,17 +3,20 @@ import AppLayout from "./components/AppLayout"
 import Home from "./pages/Home"
 
 function App() {
+  // ได้เป็น "/da-bug/" จาก vite.config.js (หรือ "/" ตอนรันบนโดเมนอื่น)
+  const basename = import.meta.env.BASE_URL || "/"
+
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={basename}>
       <Routes>
         {/* เด้งกลับหน้าแรกถ้าเข้า /index.html ตรง ๆ */}
         <Route path="/index.html" element={<Navigate to="/" replace />} />
 
         {/* ใช้ AppLayout เป็น layout หลัก */}
         <Route path="/" element={<AppLayout />}>
-          {/* หน้าเริ่มต้นใต้ Layout -> จะแสดง Topbar/Sidebar ด้วย */}
+          {/* หน้าเริ่มต้นใต้ Layout */}
           <Route index element={<Home />} />
-          {/* ถ้าจะให้ /home ก็ยังใช้ได้ */}
+          {/* /home ก็ยังใช้ได้ */}
           <Route path="home" element={<Home />} />
         </Route>
 
