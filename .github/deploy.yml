@@ -1,0 +1,93 @@
+name: Deploy Vite React to GCS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      GCS_BUCKET_RAW: ${{ secrets.GCS_BUCKET }}       # da-bug
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}   # da-bug
+      GCP_CDN_URL_MAP: ${{ secrets.GCP_CDN_URL_MAP }} # ถ้าไม่ได้ใช้ CDN ปล่อยว่าง
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install & Build
+        run: |
+          npm ci || npm i
+          npm run build
+
+      - name: Auth with Google (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud (includes gsutil)
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify/Create GCS bucket
+        id: verify_bucket
+        run: |
+          set -euo pipefail
+          raw="${GCS_BUCKET_RAW:-}"
+          raw="${raw#gs://}"; raw="${raw%/}"
+          raw="$(echo "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/^["'\'']+//; s/["'\'']+$//')"
+          echo "Using bucket (normalized): $raw"
+          [ -n "$raw" ] || { echo "ERROR: empty bucket"; exit 1; }
+
+          echo "BUCKET_NORMALIZED=$raw" >> "$GITHUB_OUTPUT"
+
+          PROJECT="${GCP_PROJECT_ID:-$(gcloud config get-value core/project || true)}"
+          [ -n "$PROJECT" ] || { echo "ERROR: empty project"; exit 1; }
+          echo "Using project: $PROJECT"
+
+          if ! gcloud storage buckets describe "gs://$raw" --project="$PROJECT" >/dev/null 2>&1; then
+            echo "Bucket gs://$raw not found. Creating..."
+            gcloud storage buckets create "gs://$raw" \
+              --project="$PROJECT" \
+              --location=ASIA-SOUTHEAST1 \
+              --uniform-bucket-level-access
+          else
+            echo "Bucket gs://$raw exists."
+          fi
+
+          gcloud storage buckets update "gs://$raw" \
+            --web-main-page-suffix=index.html \
+            --web-error-page=index.html || true
+
+      - name: Upload index.html (no-cache) and assets (immutable)
+        env:
+          BUCKET: ${{ steps.verify_bucket.outputs.BUCKET_NORMALIZED }}
+        run: |
+          set -euo pipefail
+          test -f dist/index.html || { echo "dist/index.html not found. Did build fail?"; exit 1; }
+
+          gsutil -m rm -r "gs://$BUCKET/assets/**" 2>/dev/null || true
+          gsutil -h "Cache-Control:no-cache" cp "dist/index.html" "gs://$BUCKET/index.html"
+
+          if [ -d "dist/assets" ]; then
+            gsutil -m -h "Cache-Control:public, max-age=31536000, immutable" cp -r "dist/assets/*" "gs://$BUCKET/assets/"
+          else
+            echo "WARN: dist/assets not found (Vite may have inlined assets)"
+          fi
+
+      - name: Invalidate Cloud CDN (optional)
+        if: ${{ env.GCP_CDN_URL_MAP != '' }}
+        run: |
+          gcloud compute url-maps invalidate-cdn-cache "${GCP_CDN_URL_MAP}" --path "/*" --quiet
