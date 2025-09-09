@@ -72,21 +72,22 @@ jobs:
             --web-main-page-suffix=index.html \
             --web-error-page=index.html || true
 
-      - name: Upload index.html (no-cache) and assets (immutable)
+      # ✅ อัปโหลดทุกไฟล์ใน dist และทำให้ index.html no-cache
+      - name: Upload site (all dist files + no-cache index.html)
         env:
           BUCKET: ${{ steps.verify_bucket.outputs.BUCKET_NORMALIZED }}
         run: |
           set -euo pipefail
           test -f dist/index.html || { echo "dist/index.html not found. Did build fail?"; exit 1; }
 
-          gsutil -m rm -r "gs://$BUCKET/assets/**" 2>/dev/null || true
-          gsutil -h "Cache-Control:no-cache" cp "dist/index.html" "gs://$BUCKET/index.html"
+          # (ทางเลือก) ล้างของเก่าทั้ง bucket เพื่อลดไฟล์ตกค้าง/404
+          gsutil -m rm -r "gs://$BUCKET/**" 2>/dev/null || true
 
-          if [ -d "dist/assets" ]; then
-            gsutil -m -h "Cache-Control:public, max-age=31536000, immutable" cp -r "dist/assets/*" "gs://$BUCKET/assets/"
-          else
-            echo "WARN: dist/assets not found (Vite may have inlined assets)"
-          fi
+          # 1) อัปโหลดทุกไฟล์จาก dist ตามโครงสร้างจริง ด้วย cache ยาว (ไฟล์มีแฮช)
+          gsutil -m -h "Cache-Control:public, max-age=31536000, immutable" cp -r "dist/*" "gs://$BUCKET/"
+
+          # 2) อัป index.html ทับด้วย no-cache เพื่อให้หน้าแรกอัปเดตทันที
+          gsutil -h "Cache-Control:no-cache" cp "dist/index.html" "gs://$BUCKET/index.html"
 
       - name: Invalidate Cloud CDN (optional)
         if: ${{ env.GCP_CDN_URL_MAP != '' }}
