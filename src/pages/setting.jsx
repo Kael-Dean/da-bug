@@ -4,26 +4,21 @@ import { useEffect, useMemo, useState } from "react"
 /** ---------- ENV ---------- */
 const API_BASE = import.meta.env.VITE_API_BASE || ""
 
-/** ---------- CONFIG: 4 ค่าน้ำ + เกณฑ์แนะนำ (ปรับได้) ---------- */
+/** ---------- CONFIG: 4 ค่าน้ำ (ปรับช่วงได้ตามหน้างาน) ---------- */
 const METRICS_CONFIG = [
-  { key: "ph",   label: "pH",                   unit: "",     goodMin: 6.5, goodMax: 8.0,  hint: "ช่วงเหมาะสมสำหรับเลี้ยงแมลงดาโดยทั่วไป 6.5–8.0" },
-  { key: "temp", label: "อุณหภูมิ",              unit: "°C",   goodMin: 24,  goodMax: 30,   hint: "ควรอุ่นพอเหมาะ 24–30°C" },
-  { key: "tds",  label: "TDS (สารละลายรวม)",     unit: "ppm",  goodMin: 150, goodMax: 500, hint: "ค่าประมาณสภาพแร่ธาตุรวม 150–500 ppm" },
-  { key: "do",   label: "ออกซิเจนละลายน้ำ (DO)", unit: "mg/L", goodMin: 4,   goodMax: 10,  hint: "ควรมากกว่า 4 mg/L" },
+  { key: "temp",      label: "อุณหภูมิ", unit: "°C",  goodMin: 24,  goodMax: 30,  hint: "ช่วงเหมาะสม 24–30°C" },
+  { key: "turbidity", label: "ความขุ่น", unit: "NTU", goodMin: 0,   goodMax: 50,  hint: "ควรไม่ขุ่นมากกว่า ~50 NTU" },
+  { key: "salinity",  label: "ความเค็ม", unit: "ppt", goodMin: 0,   goodMax: 1,   hint: "น้ำจืดควรต่ำมาก < 1 ppt" },
+  { key: "level",     label: "ระดับน้ำ", unit: "cm",  goodMin: 10,  goodMax: 25,  hint: "ปรับตามความสูงบ่อเลี้ยงจริง" },
 ]
 
 /**
- * ✅ ฝั่ง Backend (ตัวอย่างสเปก)
+ * Backend Spec (แนะนำ)
  * GET  ${API_BASE}/sensor/settings
- *    -> { recipients: string[], metrics: { [key]: { min:number, max:number, enabled:boolean } } }
  * PUT  ${API_BASE}/sensor/settings
- *    <- same payload as GET
  * POST ${API_BASE}/sensor/settings/test-email
- *    -> body: { recipients: string[], sample: { [key]: number } }  // ส่งอีเมลทดสอบ
- *
- * ถ้ายังไม่มี API: หน้าเพจนี้จะใช้ localStorage คีย์ "water_alert_settings" แทนโดยอัตโนมัติ
+ * ถ้ายังไม่มี API: ใช้ localStorage คีย์ "water_alert_settings"
  */
-
 const LS_KEY = "water_alert_settings"
 
 function defaultSettings() {
@@ -42,7 +37,7 @@ function parseRecipients(input) {
 }
 
 function isEmailish(s) {
-  // ไม่ต้องเคร่งมาก แค่กันพิมพ์ผิดชัดๆ
+  // ตรวจรูปแบบอีเมลง่าย ๆ เพื่อกันพิมพ์ผิด
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
 }
 
@@ -61,7 +56,7 @@ function Setting() {
   const [recipientsInput, setRecipientsInput] = useState("")
   const [metrics, setMetrics] = useState(defaultSettings().metrics)
 
-  const useMock = !API_BASE // ถ้าไม่มี API_BASE ให้ใช้ localStorage
+  const useMock = !API_BASE
 
   /** ---------- โหลดค่า ---------- */
   async function loadSettings() {
@@ -73,7 +68,6 @@ function Setting() {
         const res = await fetch(`${API_BASE}/sensor/settings`)
         if (!res.ok) throw new Error(`Bad status ${res.status}`)
         const json = await res.json()
-        // รูปแบบ safety merge
         const base = defaultSettings()
         const loaded = {
           recipients: Array.isArray(json?.recipients) ? json.recipients : base.recipients,
@@ -82,7 +76,6 @@ function Setting() {
         setRecipientsInput(toDisplayRecipients(loaded.recipients))
         setMetrics(loaded.metrics)
       } else {
-        // localStorage
         const raw = localStorage.getItem(LS_KEY)
         const obj = raw ? JSON.parse(raw) : defaultSettings()
         setRecipientsInput(toDisplayRecipients(obj.recipients))
@@ -110,7 +103,6 @@ function Setting() {
     setError("")
     setOk("")
 
-    // validate
     const recipients = parseRecipients(recipientsInput)
     for (const r of recipients) {
       if (!isEmailish(r)) {
@@ -120,7 +112,6 @@ function Setting() {
       }
     }
 
-    // เช็คช่วง min<max
     for (const m of METRICS_CONFIG) {
       const { min, max } = metrics[m.key] || {}
       if (!(Number.isFinite(min) && Number.isFinite(max))) {
@@ -177,14 +168,13 @@ function Setting() {
       }
     }
 
-    // สุ่ม sample ค่าที่เกินช่วงสักตัว เพื่อให้ทดสอบข้อความแจ้งเตือนได้
     const sample = {}
     METRICS_CONFIG.forEach((m) => {
       const { min, max, enabled } = metrics[m.key] || {}
       if (enabled) {
-        // เลือกสุ่มต่ำกว่า min หรือสูงกว่า max
         const outLow = Math.random() < 0.5
-        sample[m.key] = outLow ? Number(min) - 0.1 * Math.abs(min || 1) - 0.1 : Number(max) + 0.1 * Math.abs(max || 1) + 0.1
+        sample[m.key] =
+          outLow ? Number(min) - 0.1 * Math.abs(min || 1) - 0.1 : Number(max) + 0.1 * Math.abs(max || 1) + 0.1
       }
     })
 
@@ -197,7 +187,6 @@ function Setting() {
         })
         if (!res.ok) throw new Error(`Bad status ${res.status}`)
       } else {
-        // mock: แกล้งดีเลย์เล็กน้อย
         await new Promise((r) => setTimeout(r, 700))
         console.log("[MOCK] send test email to:", recipients, "sample:", sample)
       }
@@ -225,6 +214,10 @@ function Setting() {
     () => METRICS_CONFIG.some((m) => !!metrics[m.key]?.enabled),
     [metrics]
   )
+
+  // สไตล์ปุ่มให้ “ขนาดเท่ากัน”
+  const btnBase =
+    "h-10 min-w-[160px] rounded-xl px-4 py-2 text-sm inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
 
   return (
     <div className="mx-auto max-w-3xl p-3 md:p-6">
@@ -320,39 +313,40 @@ function Setting() {
         })}
       </div>
 
-      {/* Actions */}
-      <div className="sticky bottom-0 z-10 mt-4 rounded-2xl border border-gray-200 bg-white/90 p-3 backdrop-blur dark:border-gray-800 dark:bg-gray-900/80">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-[11px] text-gray-500 dark:text-gray-400">
+      {/* Actions (ไม่ sticky ให้ไหลไปท้ายเพจปกติ) */}
+      <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          <div className="text-[11px] text-gray-500 dark:text-gray-400 sm:mr-auto">
             {hasAnyEnabled
               ? "ระบบจะส่งอีเมลเมื่อค่าจริงต่ำกว่า/สูงกว่าช่วงที่ตั้งไว้"
               : "คุณปิดแจ้งเตือนของทุกตัวชี้วัดอยู่ จะไม่มีการส่งอีเมล"}
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={resetRecommended}
-              className="rounded-xl border border-gray-300 px-4 py-2 text-sm hover:bg-gray-50 active:scale-[0.99] dark:border-gray-700 dark:hover:bg-gray-800"
-            >
-              รีเซ็ตเป็นค่าแนะนำ
-            </button>
-            <button
-              type="button"
-              onClick={sendTestEmail}
-              disabled={testing}
-              className="rounded-xl border border-emerald-200 px-4 py-2 text-sm text-emerald-700 ring-emerald-300 hover:bg-emerald-50 active:scale-[0.99] disabled:opacity-50 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-900/20"
-            >
-              {testing ? "กำลังส่งอีเมลทดสอบ..." : "ส่งอีเมลทดสอบ"}
-            </button>
-            <button
-              type="button"
-              onClick={saveSettings}
-              disabled={saving}
-              className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-sm ring-emerald-400 hover:bg-emerald-700 focus:outline-none focus:ring-2 active:scale-[0.99] disabled:opacity-60"
-            >
-              {saving ? "กำลังบันทึก..." : "บันทึกการตั้งค่า"}
-            </button>
-          </div>
+
+          <button
+            type="button"
+            onClick={resetRecommended}
+            className={`${btnBase} border border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800`}
+          >
+            รีเซ็ตเป็นค่าแนะนำ
+          </button>
+
+          <button
+            type="button"
+            onClick={sendTestEmail}
+            disabled={testing}
+            className={`${btnBase} border border-emerald-200 text-emerald-700 ring-emerald-300 hover:bg-emerald-50 dark:border-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-900/20`}
+          >
+            {testing ? "กำลังส่งอีเมลทดสอบ..." : "ส่งอีเมลทดสอบ"}
+          </button>
+
+          <button
+            type="button"
+            onClick={saveSettings}
+            disabled={saving}
+            className={`${btnBase} bg-emerald-600 font-medium text-white shadow-sm ring-emerald-400 hover:bg-emerald-700 focus:outline-none focus:ring-2`}
+          >
+            {saving ? "กำลังบันทึก..." : "บันทึกการตั้งค่า"}
+          </button>
         </div>
 
         {/* Alerts */}

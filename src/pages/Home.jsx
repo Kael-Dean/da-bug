@@ -1,20 +1,21 @@
+// src/pages/Home.jsx
 import { useEffect, useMemo, useState } from "react"
 
 /** ---------- ENV ---------- */
 const API_BASE = import.meta.env.VITE_API_BASE || ""
 
-/** ---------- CONFIG: 4 ค่าน้ำ + เกณฑ์ (ตัวอย่างสำหรับเลี้ยงแมลงดา ปรับได้) ---------- */
+/** ---------- CONFIG: 4 ค่าน้ำ (ปรับช่วงได้ตามหน้างาน) ---------- */
 const METRICS_CONFIG = [
-  { key: "ph", label: "pH", unit: "", goodMin: 6.5, goodMax: 8.0 },
-  { key: "temp", label: "อุณหภูมิ", unit: "°C", goodMin: 24, goodMax: 30 },
-  { key: "tds", label: "TDS", unit: "ppm", goodMin: 150, goodMax: 500 },
-  { key: "do", label: "ออกซิเจนละลายน้ำ (DO)", unit: "mg/L", goodMin: 4, goodMax: 10 },
+  { key: "temp",      label: "อุณหภูมิ", unit: "°C",  goodMin: 24,  goodMax: 30 },
+  { key: "turbidity", label: "ความขุ่น", unit: "NTU", goodMin: 0,   goodMax: 50 },
+  { key: "salinity",  label: "ความเค็ม", unit: "ppt", goodMin: 0,   goodMax: 1 },    // ฟาร์มน้ำจืดควรต่ำมาก
+  { key: "level",     label: "ระดับน้ำ", unit: "cm",  goodMin: 10,  goodMax: 25 },   // ปรับตามบ่อ/กล่องเลี้ยงจริง
 ]
 
-/** ตัวอย่างโครงสร้าง response ที่ API ควรส่ง (หากมี)
+/** ตัวอย่างโครงสร้าง response ที่ API ควรส่ง
 [
-  { ts: "2025-09-06T00:05:00+07:00", ph: 7.1, temp: 27.4, tds: 300, do: 5.2 },
-  { ts: "2025-09-06T00:10:00+07:00", ph: 7.0, temp: 27.6, tds: 305, do: 5.1 },
+  { ts: "2025-09-06T00:05:00+07:00", temp: 27.4, turbidity: 18, salinity: 0.3, level: 20.1 },
+  { ts: "2025-09-06T00:10:00+07:00", temp: 27.6, turbidity: 22, salinity: 0.3, level: 20.0 },
   ...
 ]
 */
@@ -52,10 +53,14 @@ function generateMockData() {
     const ts = new Date(baseTs + i * 20 * 60 * 1000) // ทุกๆ 20 นาที
     rows.push({
       ts: ts.toISOString(),
-      ph: 7 + Math.sin(i / 7) * 0.3 + (Math.random() - 0.5) * 0.1,
+      // อุณหภูมิ: กลาง ~26-28°C
       temp: 26 + Math.sin(i / 5) * 1.2 + (Math.random() - 0.5) * 0.4,
-      tds: 320 + Math.sin(i / 6) * 40 + (Math.random() - 0.5) * 10,
-      do: 5.5 + Math.sin(i / 8) * 0.6 + (Math.random() - 0.5) * 0.2,
+      // ความขุ่น: 10–40 NTU แกว่งเล็กน้อย
+      turbidity: 25 + Math.sin(i / 7) * 10 + (Math.random() - 0.5) * 4,
+      // ความเค็ม: น้ำจืด ~0.2–0.5 ppt
+      salinity: 0.35 + Math.sin(i / 11) * 0.1 + (Math.random() - 0.5) * 0.03,
+      // ระดับน้ำ: ~18–22 cm
+      level: 20 + Math.sin(i / 9) * 1.2 + (Math.random() - 0.5) * 0.6,
     })
   }
   return rows
