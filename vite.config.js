@@ -1,15 +1,10 @@
+// vite.config.js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-// https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
-  base: '/',     // ✅ สำคัญ! ให้ path ของไฟล์ static ชี้จาก root bucket
-  build: {
-    outDir: 'dist',
-  },
+  base: '/',               // เปิดที่ https://storage.googleapis.com/<bucket>/index.html
+  plugins: [react(), tailwindcss()],
+  build: { outDir: 'dist' } // ใช้ค่า default: assets จะอยู่ dist/assets
 })
