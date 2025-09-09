@@ -1,13 +1,10 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
+import { HashRouter, Routes, Route, Navigate } from "react-router-dom"
 import AppLayout from "./components/AppLayout"
 import Home from "./pages/Home"
 
 function App() {
-  // ได้เป็น "/da-bug/" จาก vite.config.js (หรือ "/" ตอนรันบนโดเมนอื่น)
-  const basename = import.meta.env.BASE_URL || "/"
-
   return (
-    <BrowserRouter basename={basename}>
+    <HashRouter>
       <Routes>
         {/* เด้งกลับหน้าแรกถ้าเข้า /index.html ตรง ๆ */}
         <Route path="/index.html" element={<Navigate to="/" replace />} />
@@ -23,7 +20,7 @@ function App() {
         {/* กันพิมพ์พาธมั่ว */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   )
 }
 
