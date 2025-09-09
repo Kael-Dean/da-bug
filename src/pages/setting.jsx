@@ -15,6 +15,7 @@ const METRICS_CONFIG = [
 /**
  * Backend Spec (แนะนำ)
  * GET  ${API_BASE}/sensor/settings
+ *    -> { recipients: string[], metrics: { [key]: { min:number, max:number, enabled:boolean } } }
  * PUT  ${API_BASE}/sensor/settings
  * POST ${API_BASE}/sensor/settings/test-email
  * ถ้ายังไม่มี API: ใช้ localStorage คีย์ "water_alert_settings"
@@ -58,6 +59,34 @@ function Setting() {
 
   const useMock = !API_BASE
 
+  /** ---------- Persist helper: เขียนลง localStorage + เรียก PUT ถ้ามี API ---------- */
+  async function persist(settings, { silent = true } = {}) {
+    // เขียนลง localStorage เพื่อให้จำค่าแม้ปิดเว็บ/ย้ายหน้า
+    localStorage.setItem(LS_KEY, JSON.stringify(settings))
+
+    // ซิงก์ไปฝั่งเซิร์ฟเวอร์ถ้ามี API
+    if (!useMock) {
+      try {
+        const res = await fetch(`${API_BASE}/sensor/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings),
+        })
+        if (!res.ok) throw new Error(`Bad status ${res.status}`)
+        if (!silent) setOk("บันทึกสำเร็จ")
+      } catch (e) {
+        console.warn("Persist failed:", e)
+        if (!silent) setError("บันทึกไม่สำเร็จ")
+      }
+    } else {
+      if (!silent) setOk("บันทึกสำเร็จ")
+    }
+  }
+
+  function currentPayload() {
+    return { recipients: parseRecipients(recipientsInput), metrics }
+  }
+
   /** ---------- โหลดค่า ---------- */
   async function loadSettings() {
     setLoading(true)
@@ -97,7 +126,7 @@ function Setting() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** ---------- บันทึก ---------- */
+  /** ---------- บันทึก (กดปุ่ม) ---------- */
   async function saveSettings() {
     setSaving(true)
     setError("")
@@ -126,23 +155,8 @@ function Setting() {
       }
     }
 
-    const payload = { recipients, metrics }
-
     try {
-      if (!useMock) {
-        const res = await fetch(`${API_BASE}/sensor/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error(`Bad status ${res.status}`)
-      } else {
-        localStorage.setItem(LS_KEY, JSON.stringify(payload))
-      }
-      setOk("บันทึกสำเร็จ")
-    } catch (e) {
-      console.error(e)
-      setError("บันทึกไม่สำเร็จ")
+      await persist({ recipients, metrics }, { silent: false })
     } finally {
       setSaving(false)
     }
@@ -168,6 +182,10 @@ function Setting() {
       }
     }
 
+    // บันทึกล่าสุดก่อนยิงทดสอบ
+    await persist({ recipients, metrics }, { silent: true })
+
+    // mock ค่าที่เกินช่วงเพื่อทดสอบ
     const sample = {}
     METRICS_CONFIG.forEach((m) => {
       const { min, max, enabled } = metrics[m.key] || {}
@@ -210,102 +228,127 @@ function Setting() {
     setMetrics((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
   }
 
+  /** ---------- Toggle สวิตช์: บันทึกทันที (จำค่าแม้ปิดเว็บ/ย้ายหน้า) ---------- */
+  async function toggleEnabled(key, nextEnabled) {
+    setMetrics((prev) => {
+      const next = { ...prev, [key]: { ...prev[key], enabled: nextEnabled } }
+      const payload = { recipients: parseRecipients(recipientsInput), metrics: next }
+      // persist แบบเงียบ ๆ ทุกครั้งที่สลับสวิตช์
+      persist(payload, { silent: true })
+      return next
+    })
+  }
+
   const hasAnyEnabled = useMemo(
     () => METRICS_CONFIG.some((m) => !!metrics[m.key]?.enabled),
     [metrics]
   )
 
-  // สไตล์ปุ่มให้ “ขนาดเท่ากัน”
+  /** ---------- UI ---------- */
+  // ปุ่มใหญ่ขึ้น อ่านง่าย
   const btnBase =
-    "h-10 min-w-[160px] rounded-xl px-4 py-2 text-sm inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
+    "h-11 min-w-[180px] rounded-xl px-5 py-2 text-base inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
 
   return (
-    <div className="mx-auto max-w-3xl p-3 md:p-6">
-      {/* Header */}
-      <div className="mb-4 flex items-start justify-between gap-3">
+    <div className="mx-auto max-w-6xl p-4 md:p-8">
+      {/* Header ใหญ่ขึ้น */}
+      <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-emerald-600 dark:text-emerald-400">
+          <h1 className="text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
             ตั้งค่าแจ้งเตือนค่าน้ำ
           </h1>
-          <p className="text-sm text-gray-600 dark:text-gray-300">
-            กำหนดช่วงค่าที่ “ยอมรับได้” ของแต่ละตัวชี้วัด หากค่าเซ็นเซอร์ต่ำกว่า/สูงกว่าช่วงนี้
-            ระบบจะส่งอีเมลแจ้งเตือนให้คุณ
+          <p className="mt-1 text-base text-gray-700 dark:text-gray-300">
+            กำหนดช่วงค่าที่ “ยอมรับได้” ของแต่ละตัวชี้วัด หากค่าเซ็นเซอร์ต่ำกว่า/สูงกว่าช่วงนี้ ระบบจะส่งอีเมลแจ้งเตือน
           </p>
         </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
+        <div className="text-sm text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
       </div>
 
-      {/* Recipients */}
-      <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-        <div className="mb-2 text-sm font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
+      {/* Recipients (ใหญ่ขึ้น) */}
+      <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+        <div className="mb-2 text-base font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
         <input
           type="text"
-          className="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+          className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
           placeholder="กรอกอีเมลคั่นด้วยเครื่องหมายจุลภาค เช่น you@example.com, staff@farm.co"
           value={recipientsInput}
           onChange={(e) => setRecipientsInput(e.target.value)}
         />
-        <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
           คั่นด้วยเครื่องหมายจุลภาค (,), เว้นวรรค หรือขึ้นบรรทัดใหม่ก็ได้
         </div>
       </div>
 
-      {/* Metrics */}
-      <div className="grid grid-cols-1 gap-3">
+      {/* Metrics (การ์ดใหญ่ + สวิตช์เลื่อน + ป้ายข้อความข้างปุ่ม) */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {METRICS_CONFIG.map((m) => {
           const v = metrics[m.key] || { min: m.goodMin, max: m.goodMax, enabled: true }
+          const enabled = !!v.enabled
           return (
             <div
               key={m.key}
-              className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+              className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900"
             >
-              <div className="mb-3 flex items-start justify-between gap-3">
+              <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-sm font-semibold">{m.label}</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">{m.hint}</div>
+                  <div className="text-base font-semibold">{m.label}</div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">{m.hint}</div>
                 </div>
 
-                <label className="inline-flex cursor-pointer items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 accent-emerald-600"
-                    checked={!!v.enabled}
-                    onChange={(e) => updateMetric(m.key, { enabled: e.target.checked })}
-                  />
-                  เปิดแจ้งเตือน
-                </label>
+                {/* กลุ่มป้าย + สวิตช์ + สถานะ */}
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-gray-700 dark:text-gray-300">เปิดการแจ้งเตือน</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={enabled}
+                    aria-label="สวิตช์เปิดการแจ้งเตือน"
+                    onClick={() => toggleEnabled(m.key, !enabled)}
+                    className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition ${
+                      enabled ? "bg-emerald-600" : "bg-gray-300 dark:bg-gray-700"
+                    }`}
+                    title={enabled ? "ปิดการแจ้งเตือน" : "เปิดการแจ้งเตือน"}
+                  >
+                    <span
+                      className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                        enabled ? "translate-x-6" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">{enabled ? "เปิดอยู่" : "ปิดอยู่"}</span>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="mb-1 block text-xs text-gray-600 dark:text-gray-300">ต่ำสุดที่ยอมรับได้</label>
+                  <label className="mb-1 block text-sm text-gray-700 dark:text-gray-300">ต่ำสุดที่ยอมรับได้</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
                       step="any"
                       value={v.min}
                       onChange={(e) => updateMetric(m.key, { min: Number(e.target.value) })}
-                      className="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+                      className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
                     />
-                    <span className="text-xs text-gray-500 dark:text-gray-400">{m.unit}</span>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">{m.unit}</span>
                   </div>
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs text-gray-600 dark:text-gray-300">สูงสุดที่ยอมรับได้</label>
+                  <label className="mb-1 block text-sm text-gray-700 dark:text-gray-300">สูงสุดที่ยอมรับได้</label>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
                       step="any"
                       value={v.max}
                       onChange={(e) => updateMetric(m.key, { max: Number(e.target.value) })}
-                      className="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+                      className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
                     />
-                    <span className="text-xs text-gray-500 dark:text-gray-400">{m.unit}</span>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">{m.unit}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
+              <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
                 คำแนะนำเดิม: {m.goodMin} – {m.goodMax} {m.unit}
               </div>
             </div>
@@ -313,10 +356,10 @@ function Setting() {
         })}
       </div>
 
-      {/* Actions (ไม่ sticky ให้ไหลไปท้ายเพจปกติ) */}
-      <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-3 dark:border-gray-800 dark:bg-gray-900">
-        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-          <div className="text-[11px] text-gray-500 dark:text-gray-400 sm:mr-auto">
+      {/* Actions */}
+      <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+          <div className="text-sm text-gray-600 dark:text-gray-400 sm:mr-auto">
             {hasAnyEnabled
               ? "ระบบจะส่งอีเมลเมื่อค่าจริงต่ำกว่า/สูงกว่าช่วงที่ตั้งไว้"
               : "คุณปิดแจ้งเตือนของทุกตัวชี้วัดอยู่ จะไม่มีการส่งอีเมล"}
