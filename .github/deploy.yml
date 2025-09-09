@@ -3,6 +3,7 @@ name: Deploy Vite React to GCS
 on:
   push:
     branches: [ main ]
+  workflow_dispatch: {}
 
 jobs:
   build-and-deploy:
@@ -13,8 +14,8 @@ jobs:
       id-token: write
 
     env:
-      GCS_BUCKET_RAW: ${{ secrets.GCS_BUCKET }}       # da-bug
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}   # da-bug
+      GCS_BUCKET_RAW: ${{ secrets.GCS_BUCKET }}       # เช่น da-bug (ไม่ใส่ gs://)
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}   # เช่น peaceful-web-xxxxxx
       GCP_CDN_URL_MAP: ${{ secrets.GCP_CDN_URL_MAP }} # ถ้าไม่ได้ใช้ CDN ปล่อยว่าง
 
     steps:
