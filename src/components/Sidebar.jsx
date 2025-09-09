@@ -1,3 +1,4 @@
+// src/components/Sidebar.jsx
 import { NavLink } from "react-router-dom"
 
 const Sidebar = ({ isOpen, setIsOpen }) => {
@@ -52,9 +53,11 @@ const BrandSmall = () => (
   </div>
 )
 
+/** เพิ่มลิงก์ /settings ตรงนี้ */
 const NavSection = ({ base, active, inactive, onNavigate = () => {} }) => {
   return (
     <nav className="mt-2 space-y-1">
+      {/* Home */}
       <NavLink
         to="/home"
         onClick={onNavigate}
@@ -66,6 +69,19 @@ const NavSection = ({ base, active, inactive, onNavigate = () => {} }) => {
         <span>หน้าหลัก</span>
       </NavLink>
 
+      {/* Settings */}
+      <NavLink
+        to="/settings"
+        onClick={onNavigate}
+        className={({ isActive }) => `${base} ${isActive ? active : inactive}`}
+      >
+        <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gray-100 text-xs dark:bg-gray-800">
+          ⚙️
+        </span>
+        <span>ตั้งค่า</span>
+      </NavLink>
+
+      {/* (ยังไม่เปิดใช้) Report */}
       <button
         className={`${base} ${inactive} w-full text-left`}
         type="button"
