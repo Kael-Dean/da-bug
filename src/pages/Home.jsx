@@ -14,7 +14,6 @@ const METRICS_CONFIG = [
 /** ตัวอย่างโครงสร้าง response ที่ API ควรส่ง (หากมี)
 [
   { ts: "2025-09-06T00:05:00+07:00", ph: 7.1, temp: 27.4, tds: 300, do: 5.2 },
-  { ts: "2025-09-06T00:10:00+07:00", ph: 7.0, temp: 27.6, tds: 305, do: 5.1 },
   ...
 ]
 */
@@ -77,6 +76,69 @@ function formatTime(dt) {
   } catch {
     return ""
   }
+}
+
+/** ---------- THEME TOGGLE (ไม่ทับตัวหนังสือบน PC) ---------- */
+const getInitialDark = () => {
+  const stored = localStorage.getItem("darkMode")
+  if (stored !== null) return stored === "true"
+  return window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false
+}
+
+function SunIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" {...props}>
+      <circle cx="12" cy="12" r="4" strokeWidth="2" />
+      <path strokeWidth="2" d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+    </svg>
+  )
+}
+function MoonIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" {...props}>
+      <path strokeWidth="2" d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  )
+}
+
+function ThemeSwitch() {
+  const [dark, setDark] = useState(getInitialDark)
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark)
+    localStorage.setItem("darkMode", String(dark))
+  }, [dark])
+
+  // ปุ่มแบบ segmented: 2 คอลัมน์, knob อยู่ “หลัง” ตัวอักษร (z-0), ตัวอักษรอยู่ “หน้า” (z-10)
+  return (
+    <button
+      type="button"
+      onClick={() => setDark((v) => !v)}
+      role="switch"
+      aria-checked={dark}
+      className="relative inline-grid h-10 w-40 grid-cols-2 items-center rounded-2xl border border-gray-200 bg-white p-1 shadow-sm transition dark:border-gray-800 dark:bg-gray-900"
+    >
+      {/* Knob */}
+      <span
+        aria-hidden
+        className={[
+          "absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-xl shadow",
+          "bg-gray-100 transition-transform duration-200 ease-out dark:bg-gray-800",
+          dark ? "translate-x-[calc(100%+0.5rem)]" : "translate-x-0",
+          "z-0",
+        ].join(" ")}
+      />
+      {/* Labels */}
+      <span className={`z-10 flex items-center justify-center gap-1 text-sm font-medium ${dark ? "text-gray-500" : "text-gray-900"}`}>
+        <SunIcon className="h-4 w-4" />
+        <span className="hidden sm:inline">Light</span>
+      </span>
+      <span className={`z-10 flex items-center justify-center gap-1 text-sm font-medium ${dark ? "text-white" : "text-gray-500"}`}>
+        <MoonIcon className="h-4 w-4" />
+        <span className="hidden sm:inline">Dark</span>
+      </span>
+    </button>
+  )
 }
 
 /** ---------- Presentational ---------- */
@@ -217,13 +279,17 @@ function Home() {
 
   return (
     <div className="mx-auto max-w-7xl p-3 md:p-6">
-      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-        <div>
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex-1">
           <h1 className="text-xl font-semibold text-emerald-600 dark:text-emerald-400">สถานะค่าน้ำ (วันนี้)</h1>
           <p className="text-sm text-gray-600 dark:text-gray-300">ช่วงเวลา: ตั้งแต่เที่ยงคืนล่าสุดจนถึง 23:59 ของวันนี้</p>
         </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400">
-          {loading ? "กำลังอัปเดต..." : lastUpdated ? `อัปเดตล่าสุด: ${formatTime(lastUpdated)}` : ""}
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            {loading ? "กำลังอัปเดต..." : lastUpdated ? `อัปเดตล่าสุด: ${formatTime(lastUpdated)}` : ""}
+          </div>
+          <ThemeSwitch />
         </div>
       </div>
 
