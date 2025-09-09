@@ -158,7 +158,7 @@ function MetricCard({ metric }) {
       <Sparkline series={series} />
 
       <div className="mt-3 text-[11px] text-gray-500 dark:text-gray-400">
-        * ค่าปัจจุบัน = รายการล่าสุดที่ได้รับในวันนี้
+        * ค่าปัจจุบัน = รายการล่าสุดที่ได้รับภายในวันนี้
       </div>
     </div>
   )
