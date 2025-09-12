@@ -38,7 +38,6 @@ function parseRecipients(input) {
 }
 
 function isEmailish(s) {
-  // ตรวจรูปแบบอีเมลง่าย ๆ เพื่อกันพิมพ์ผิด
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)
 }
 
@@ -59,12 +58,9 @@ function Setting() {
 
   const useMock = !API_BASE
 
-  /** ---------- Persist helper: เขียนลง localStorage + เรียก PUT ถ้ามี API ---------- */
+  /** ---------- Persist helper ---------- */
   async function persist(settings, { silent = true } = {}) {
-    // เขียนลง localStorage เพื่อให้จำค่าแม้ปิดเว็บ/ย้ายหน้า
     localStorage.setItem(LS_KEY, JSON.stringify(settings))
-
-    // ซิงก์ไปฝั่งเซิร์ฟเวอร์ถ้ามี API
     if (!useMock) {
       try {
         const res = await fetch(`${API_BASE}/sensor/settings`, {
@@ -81,10 +77,6 @@ function Setting() {
     } else {
       if (!silent) setOk("บันทึกสำเร็จ")
     }
-  }
-
-  function currentPayload() {
-    return { recipients: parseRecipients(recipientsInput), metrics }
   }
 
   /** ---------- โหลดค่า ---------- */
@@ -126,7 +118,7 @@ function Setting() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** ---------- บันทึก (กดปุ่ม) ---------- */
+  /** ---------- บันทึก ---------- */
   async function saveSettings() {
     setSaving(true)
     setError("")
@@ -182,10 +174,8 @@ function Setting() {
       }
     }
 
-    // บันทึกล่าสุดก่อนยิงทดสอบ
     await persist({ recipients, metrics }, { silent: true })
 
-    // mock ค่าที่เกินช่วงเพื่อทดสอบ
     const sample = {}
     METRICS_CONFIG.forEach((m) => {
       const { min, max, enabled } = metrics[m.key] || {}
@@ -223,17 +213,15 @@ function Setting() {
     setMetrics(base.metrics)
   }
 
-  /** ---------- จัดการอินพุต ---------- */
+  /** ---------- จัดการอินพุต/สวิตช์ ---------- */
   function updateMetric(key, patch) {
     setMetrics((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
   }
 
-  /** ---------- Toggle สวิตช์: บันทึกทันที (จำค่าแม้ปิดเว็บ/ย้ายหน้า) ---------- */
   async function toggleEnabled(key, nextEnabled) {
     setMetrics((prev) => {
       const next = { ...prev, [key]: { ...prev[key], enabled: nextEnabled } }
       const payload = { recipients: parseRecipients(recipientsInput), metrics: next }
-      // persist แบบเงียบ ๆ ทุกครั้งที่สลับสวิตช์
       persist(payload, { silent: true })
       return next
     })
@@ -245,18 +233,15 @@ function Setting() {
   )
 
   /** ---------- UI ---------- */
-  // ปุ่มใหญ่ขึ้น อ่านง่าย
   const btnBase =
     "h-11 min-w-[180px] rounded-xl px-5 py-2 text-base inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
-      {/* Header ใหญ่ขึ้น */}
+      {/* Header */}
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-            ตั้งค่าแจ้งเตือนค่าน้ำ
-          </h1>
+          <h1 className="text-2xl font-semibold text-emerald-600 dark:text-emerald-400">ตั้งค่าแจ้งเตือนค่าน้ำ</h1>
           <p className="mt-1 text-base text-gray-700 dark:text-gray-300">
             กำหนดช่วงค่าที่ “ยอมรับได้” ของแต่ละตัวชี้วัด หากค่าเซ็นเซอร์ต่ำกว่า/สูงกว่าช่วงนี้ ระบบจะส่งอีเมลแจ้งเตือน
           </p>
@@ -264,7 +249,7 @@ function Setting() {
         <div className="text-sm text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
       </div>
 
-      {/* Recipients (ใหญ่ขึ้น) */}
+      {/* Recipients */}
       <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
         <div className="mb-2 text-base font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
         <input
@@ -279,7 +264,7 @@ function Setting() {
         </div>
       </div>
 
-      {/* Metrics (การ์ดใหญ่ + สวิตช์เลื่อน + ป้ายข้อความข้างปุ่ม) */}
+      {/* Metrics */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {METRICS_CONFIG.map((m) => {
           const v = metrics[m.key] || { min: m.goodMin, max: m.goodMax, enabled: true }
@@ -295,14 +280,13 @@ function Setting() {
                   <div className="text-sm text-gray-500 dark:text-gray-400">{m.hint}</div>
                 </div>
 
-                {/* กลุ่มป้าย + สวิตช์ + สถานะ */}
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-700 dark:text-gray-300">เปิดการแจ้งเตือน</span>
+                {/* เฉพาะสวิตช์ + สถานะ (เอาข้อความ "เปิดการแจ้งเตือน" ออก) */}
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     role="switch"
                     aria-checked={enabled}
-                    aria-label="สวิตช์เปิดการแจ้งเตือน"
+                    aria-label="สวิตช์เปิด/ปิดการแจ้งเตือน"
                     onClick={() => toggleEnabled(m.key, !enabled)}
                     className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition ${
                       enabled ? "bg-emerald-600" : "bg-gray-300 dark:bg-gray-700"
@@ -315,7 +299,9 @@ function Setting() {
                       }`}
                     />
                   </button>
-                  <span className="text-xs text-gray-600 dark:text-gray-400">{enabled ? "เปิดอยู่" : "ปิดอยู่"}</span>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">
+                    {enabled ? "เปิดอยู่" : "ปิดอยู่"}
+                  </span>
                 </div>
               </div>
 
