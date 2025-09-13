@@ -2,7 +2,8 @@
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom"
 import AppLayout from "./components/AppLayout"
 import Home from "./pages/Home"
-import Setting from "./pages/setting" // หน้า Setting ที่สร้างไว้
+import Setting from "./pages/setting"   // หน้า Setting ที่มีอยู่แล้ว
+import Report from "./pages/Report"     // << เพิ่มหน้า Report
 
 function App() {
   return (
@@ -18,8 +19,11 @@ function App() {
           {/* alias: /home */}
           <Route path="home" element={<Home />} />
 
-          {/* หน้า Setting สำหรับตั้งค่าเกณฑ์แจ้งเตือน + อีเมลผู้รับ */}
+          {/* ตั้งค่า: เกณฑ์แจ้งเตือน + ผู้รับอีเมล */}
           <Route path="settings" element={<Setting />} />
+
+          {/* รายงาน: ดาวน์โหลด Excel เซ็นเซอร์ */}
+          <Route path="report" element={<Report />} />
         </Route>
 
         {/* กันพิมพ์พาธมั่ว */}

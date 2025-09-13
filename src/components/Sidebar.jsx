@@ -37,7 +37,12 @@ const Sidebar = ({ isOpen, setIsOpen }) => {
             </svg>
           </button>
         </div>
-        <NavSection base={base} active={active} inactive={inactive} onNavigate={() => setIsOpen(false)} />
+        <NavSection
+          base={base}
+          active={active}
+          inactive={inactive}
+          onNavigate={() => setIsOpen(false)}
+        />
         <Footer />
       </aside>
     </>
@@ -53,7 +58,7 @@ const BrandSmall = () => (
   </div>
 )
 
-/** เพิ่มลิงก์ /settings ตรงนี้ */
+/** เพิ่มลิงก์ /settings และ /report */
 const NavSection = ({ base, active, inactive, onNavigate = () => {} }) => {
   return (
     <nav className="mt-2 space-y-1">
@@ -81,17 +86,17 @@ const NavSection = ({ base, active, inactive, onNavigate = () => {} }) => {
         <span>ตั้งค่า</span>
       </NavLink>
 
-      {/* (ยังไม่เปิดใช้) Report */}
-      <button
-        className={`${base} ${inactive} w-full text-left`}
-        type="button"
-        onClick={() => alert("เมนูนี้ยังไม่เปิดใช้งาน")}
+      {/* Report (เปิดใช้งานแล้ว) */}
+      <NavLink
+        to="/report"
+        onClick={onNavigate}
+        className={({ isActive }) => `${base} ${isActive ? active : inactive}`}
       >
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gray-100 text-xs dark:bg-gray-800">
           📦
         </span>
-        <span>Report</span>
-      </button>
+        <span>รายงาน (Excel)</span>
+      </NavLink>
     </nav>
   )
 }
