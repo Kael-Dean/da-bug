@@ -1,3 +1,4 @@
+// src/pages/Home.jsx
 import { useEffect, useMemo, useState } from "react";
 import { get } from "../lib/api";
 
@@ -15,24 +16,62 @@ const statusClass = (s) =>
 const thDateTime = (iso) =>
   new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
 
+/** ---------- Sparkline (SVG, ไม่ใช้ไลบรารี) ---------- */
+function Sparkline({ points = [], height = 54, strokeWidth = 2 }) {
+  // points: [{t: ISO, v: number}, ...]
+  if (!points || points.length < 2) {
+    return <div className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60 text-[11px] text-slate-500 flex items-center justify-center">ไม่มีข้อมูลกราฟ</div>;
+  }
+
+  const values = points.map(p => Number(p.v)).filter(Number.isFinite);
+  if (values.length < 2) {
+    return <div className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60" />;
+  }
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const pad = (max - min) === 0 ? Math.abs(max || 1) * 0.01 : 0; // กันกรณีค่าเส้นตรง
+  const lo = min - pad, hi = max + pad, span = hi - lo;
+
+  const W = 160; // กว้างภายใน viewBox (คงที่ แล้วใช้ width:100%)
+  const stepX = W / (values.length - 1);
+  const toY = (v) => {
+    const n = (v - lo) / span;          // 0..1 (จากล่างขึ้นบน)
+    return height - n * height;
+  };
+
+  let d = "";
+  values.forEach((v, i) => {
+    const x = i * stepX;
+    const y = toY(v);
+    d += (i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`);
+  });
+
+  return (
+    <svg viewBox={`0 0 ${W} ${height}`} className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60" preserveAspectRatio="none">
+      <path d={d} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-emerald-500" />
+    </svg>
+  );
+}
+
 export default function Home() {
   const [data, setData]   = useState(null);
   const [loading, setL]   = useState(true);
   const [error, setError] = useState("");
-  const [usingPath, setUsingPath] = useState(""); // debug: ดูว่าเราใช้ endpoint ไหน
+  const [usingPath, setUsingPath] = useState(""); // debug: endpoint ที่ถูกเลือก
 
   // ปรับได้ตามจริง
   const deviceId = "esp32-1";
   const tz = "Asia/Bangkok";
-  const hours = 24;     // ใช้ถ้าต้อง fallback ไป endpoint แบบชั่วโมง
-  const limit = 144;    // ใช้กับ /recent
+  const hours = 24;     // fallback
+  const limit = 144;    // /recent
 
-  // ยิงหลาย candidate จนกว่าจะสำเร็จ (ให้ recent มาก่อน)
+  // ยิงหลาย candidate (prioritize recent)
   const fetchDashboard = async () => {
     const recentQs = `?device_id=${encodeURIComponent(deviceId)}&tz=${encodeURIComponent(tz)}&limit=${limit}`;
     const hoursQs  = `?device_id=${encodeURIComponent(deviceId)}&tz=${encodeURIComponent(tz)}&hours=${hours}`;
 
-    const bases = ["", "/api"]; // เผื่อคุณ include_router(..., prefix="/api")
+    const bases = ["", "/api"]; // เผื่อ main.py include_router(..., prefix="/api")
     const pathsPreferredFirst = [
       `/dashboard/dashboards/recent${recentQs}`,
       `/dashboard/recent${recentQs}`,
@@ -73,6 +112,7 @@ export default function Home() {
 
   const latest = data?.latest;
   const todayStats = data?.today_stats || {};
+  const series = data?.series || {}; // <- ใช้สำหรับกราฟจริง
 
   const issues = useMemo(() => {
     if (!latest) return [];
@@ -86,7 +126,7 @@ export default function Home() {
     <div className="p-4 pb-20">
       <h1 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">แดชบอร์ดคุณภาพน้ำ</h1>
 
-      {/* แถบ debug เล็กๆ เฉพาะ dev */}
+      {/* debug เล็กๆ */}
       {usingPath && (
         <div className="mb-3 text-[11px] text-slate-500 dark:text-slate-400">
           ใช้ endpoint: <code className="rounded bg-slate-100 px-2 py-0.5 dark:bg-slate-700">{usingPath}</code>
@@ -106,6 +146,7 @@ export default function Home() {
             {METRICS.map((m) => {
               const value = latest[m.key];
               const s = statusOf(value, m.goodMin, m.goodMax);
+              const points = (series?.[m.key] || []); // [{t, v}, ...]
               return (
                 <div key={m.key} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                   <div className="flex items-start justify-between">
@@ -116,6 +157,11 @@ export default function Home() {
                       </div>
                     </div>
                     <span className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium text-white ${statusClass(s)}`}>{s}</span>
+                  </div>
+
+                  {/* กราฟจริงจาก series */}
+                  <div className="mt-3 text-slate-600 dark:text-slate-300">
+                    <Sparkline points={points} />
                   </div>
 
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
