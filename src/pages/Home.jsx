@@ -17,26 +17,30 @@ const thDateTime = (iso) =>
   new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
 
 /** ---------- Sparkline (SVG, ไม่ใช้ไลบรารี) ---------- */
-function Sparkline({ points = [], height = 54, strokeWidth = 2 }) {
+function Sparkline({ points = [], height = 32, strokeWidth = 1.25 }) {
   // points: [{t: ISO, v: number}, ...]
   if (!points || points.length < 2) {
-    return <div className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60 text-[11px] text-slate-500 flex items-center justify-center">ไม่มีข้อมูลกราฟ</div>;
+    return (
+      <div className="h-[32px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60 text-[11px] text-slate-500 flex items-center justify-center">
+        ไม่มีข้อมูลกราฟ
+      </div>
+    );
   }
 
   const values = points.map(p => Number(p.v)).filter(Number.isFinite);
   if (values.length < 2) {
-    return <div className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60" />;
+    return <div className="h-[32px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60" />;
   }
 
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const pad = (max - min) === 0 ? Math.abs(max || 1) * 0.01 : 0; // กันกรณีค่าเส้นตรง
+  const pad = (max - min) === 0 ? Math.abs(max || 1) * 0.01 : 0;
   const lo = min - pad, hi = max + pad, span = hi - lo;
 
-  const W = 160; // กว้างภายใน viewBox (คงที่ แล้วใช้ width:100%)
+  const W = 160;
   const stepX = W / (values.length - 1);
   const toY = (v) => {
-    const n = (v - lo) / span;          // 0..1 (จากล่างขึ้นบน)
+    const n = (v - lo) / span;
     return height - n * height;
   };
 
@@ -48,11 +52,22 @@ function Sparkline({ points = [], height = 54, strokeWidth = 2 }) {
   });
 
   return (
-    <svg viewBox={`0 0 ${W} ${height}`} className="h-[54px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60" preserveAspectRatio="none">
-      <path d={d} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-emerald-500" />
+    <svg
+      viewBox={`0 0 ${W} ${height}`}
+      className="h-[32px] w-full rounded-lg bg-slate-50 dark:bg-slate-800/60"
+      preserveAspectRatio="none"
+    >
+      <path
+        d={d}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        className="text-emerald-500/80"
+      />
     </svg>
   );
 }
+
 
 export default function Home() {
   const [data, setData]   = useState(null);
