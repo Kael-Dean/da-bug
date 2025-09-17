@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { get } from "../lib/api";
 
 const METRICS = [
@@ -12,29 +12,62 @@ const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString(undefined,{ maxim
 const statusOf = (v, min, max) => (v==null ? "ไม่มีข้อมูล" : v<min ? "ต่ำไป" : v>max ? "สูงไป" : "ปกติ");
 const statusClass = (s) =>
   s==="ปกติ" ? "bg-emerald-600" : s==="ต่ำไป" ? "bg-amber-500" : s==="สูงไป" ? "bg-rose-600" : "bg-slate-400";
-const thDateTime = (iso) => new Intl.DateTimeFormat("th-TH",{dateStyle:"short",timeStyle:"medium"}).format(new Date(iso));
+const thDateTime = (iso) =>
+  new Intl.DateTimeFormat("th-TH", { dateStyle: "short", timeStyle: "medium" }).format(new Date(iso));
 
 export default function Home() {
   const [data, setData]   = useState(null);
   const [loading, setL]   = useState(true);
   const [error, setError] = useState("");
+  const [usingPath, setUsingPath] = useState(""); // debug: ดูว่าเราใช้ endpoint ไหน
 
+  // ปรับได้ตามจริง
   const deviceId = "esp32-1";
-  const hours = 24;
   const tz = "Asia/Bangkok";
+  const hours = 24;     // ใช้ถ้าต้อง fallback ไป endpoint แบบชั่วโมง
+  const limit = 144;    // ใช้กับ /recent
 
-  const fetchDash = () =>
-    get(`/dashboard?device_id=${encodeURIComponent(deviceId)}&hours=${hours}&tz=${encodeURIComponent(tz)}`);
+  // ยิงหลาย candidate จนกว่าจะสำเร็จ (ให้ recent มาก่อน)
+  const fetchDashboard = async () => {
+    const recentQs = `?device_id=${encodeURIComponent(deviceId)}&tz=${encodeURIComponent(tz)}&limit=${limit}`;
+    const hoursQs  = `?device_id=${encodeURIComponent(deviceId)}&tz=${encodeURIComponent(tz)}&hours=${hours}`;
+
+    const bases = ["", "/api"]; // เผื่อคุณ include_router(..., prefix="/api")
+    const pathsPreferredFirst = [
+      `/dashboard/dashboards/recent${recentQs}`,
+      `/dashboard/recent${recentQs}`,
+      `/dashboard/dashboards${hoursQs}`,
+      `/dashboard${hoursQs}`,
+    ];
+
+    let lastErr = null;
+    for (const b of bases) {
+      for (const p of pathsPreferredFirst) {
+        try {
+          const full = `${b}${p}`;
+          const res = await get(full);
+          setUsingPath(full.split("?")[0]);
+          return res;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+    }
+    throw lastErr || new Error("ไม่พบ endpoint /dashboard ที่เข้ากัน");
+  };
 
   useEffect(() => {
     let live = true;
     setL(true); setError("");
-    fetchDash()
+    fetchDashboard()
       .then((d) => live && setData(d))
       .catch((e) => live && setError(e.message || "โหลดข้อมูลไม่สำเร็จ"))
       .finally(() => live && setL(false));
 
-    const t = setInterval(() => fetchDash().then((d)=> live && setData(d)).catch(()=>{}), 30000);
+    const t = setInterval(() => {
+      fetchDashboard().then((d) => live && setData(d)).catch(() => {});
+    }, 30000);
+
     return () => { live = false; clearInterval(t); };
   }, []);
 
@@ -52,6 +85,13 @@ export default function Home() {
   return (
     <div className="p-4 pb-20">
       <h1 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">แดชบอร์ดคุณภาพน้ำ</h1>
+
+      {/* แถบ debug เล็กๆ เฉพาะ dev */}
+      {usingPath && (
+        <div className="mb-3 text-[11px] text-slate-500 dark:text-slate-400">
+          ใช้ endpoint: <code className="rounded bg-slate-100 px-2 py-0.5 dark:bg-slate-700">{usingPath}</code>
+        </div>
+      )}
 
       {loading && <div className="rounded-xl border p-4">กำลังโหลดข้อมูลจริงจากอุปกรณ์…</div>}
       {error && !loading && <div className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-700">ผิดพลาด: {error}</div>}
@@ -80,7 +120,7 @@ export default function Home() {
 
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                     <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-700/50">
-                      <div className="text-slate-500">เฉลี่ยวันนี้</div>
+                      <div className="text-slate-500">เฉลี่ย (ช่วงข้อมูลล่าสุด)</div>
                       <div className="font-medium text-slate-900 dark:text-slate-100">{fmt(todayStats?.[m.key]?.avg)} {m.unit}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-700/50">
