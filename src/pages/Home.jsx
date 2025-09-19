@@ -181,7 +181,7 @@ export default function Home() {
 
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
                     <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-700/50">
-                      <div className="text-slate-500">เฉลี่ย (ช่วงข้อมูลล่าสุด)</div>
+                      <div className="text-slate-500">เฉลี่ย</div>
                       <div className="font-medium text-slate-900 dark:text-slate-100">{fmt(todayStats?.[m.key]?.avg)} {m.unit}</div>
                     </div>
                     <div className="rounded-xl bg-slate-50 p-2 dark:bg-slate-700/50">
