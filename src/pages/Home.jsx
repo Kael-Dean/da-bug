@@ -141,13 +141,6 @@ export default function Home() {
     <div className="p-4 pb-20">
       <h1 className="mb-2 text-lg font-semibold text-slate-900 dark:text-slate-100">แดชบอร์ดคุณภาพน้ำ</h1>
 
-      {/* debug เล็กๆ */}
-      {usingPath && (
-        <div className="mb-3 text-[11px] text-slate-500 dark:text-slate-400">
-          ใช้ endpoint: <code className="rounded bg-slate-100 px-2 py-0.5 dark:bg-slate-700">{usingPath}</code>
-        </div>
-      )}
-
       {loading && <div className="rounded-xl border p-4">กำลังโหลดข้อมูลจริงจากอุปกรณ์…</div>}
       {error && !loading && <div className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-rose-700">ผิดพลาด: {error}</div>}
 
