@@ -1,13 +1,19 @@
-// src/pages/setting.jsx — integrates with FastAPI `/settings`
-// - GLOBAL mode (no Device ID input)
-// - Syncs notify emails to backend subscribers
-// - Reset to recommended + send test email
-// - Export default Setting (single-file component)
+// src/pages/setting.jsx — uses /settings + /settings/subscribers/add (SubscriberIn)
+// - GLOBAL mode (fixed DEVICE_ID)
+// - Add emails via POST /settings/subscribers/add
+// - Save thresholds via PUT /settings  (no notify_emails)
+// - Send test: ensure subscribers added, then POST /settings/send-test?device_id=...
 
 import { useEffect, useMemo, useState } from "react"
 
 /** ---------- ENV ---------- */
 const API_BASE = import.meta.env.VITE_API_BASE || ""
+
+/** ---------- DEVICE SCOPE ---------- 
+ * Backend SubscriberIn requires `device_id: str`.
+ * For global settings page, we use a fixed logical device id.
+ */
+const DEVICE_ID = "GLOBAL"
 
 /**
  * FE metric keys (UI)  ↔  BE field names
@@ -51,10 +57,9 @@ function isEmailish(s) {
 }
 
 /** ---------- API shape mapping ---------- */
-function feToPayload(recipients, feMetrics) {
+function feToSettingsPayload(feMetrics) {
   const payload = {
-    device_id: null,               // GLOBAL — ไม่มี Device ID
-    notify_emails: recipients,
+    device_id: null, // keep thresholds on GLOBAL row (backend treats None as global)
   }
   for (const m of METRICS_CONFIG) {
     const v = feMetrics[m.fe] || { min: m.goodMin, max: m.goodMax, enabled: true }
@@ -68,7 +73,6 @@ function feToPayload(recipients, feMetrics) {
 }
 
 function responseToForm(json) {
-  // ช่องอีเมลต้องว่างเสมอ (ไม่ pre-fill)
   const feMetrics = defaultMetrics()
   for (const [beKey, val] of Object.entries(json || {})) {
     const feKey = FE_BY_BE[beKey]
@@ -81,7 +85,7 @@ function responseToForm(json) {
     }
   }
   return {
-    recipientsInput: "", // ← ว่างเสมอ
+    recipientsInput: "", // ← ไม่ prefll
     metrics: feMetrics,
   }
 }
@@ -89,7 +93,7 @@ function responseToForm(json) {
 /**
  * Optional: local fallback if API_BASE is missing in dev
  */
-const LS_KEY = "water_alert_settings_v2"
+const LS_KEY = "water_alert_settings_v3"
 function loadLocal() {
   try {
     const raw = localStorage.getItem(LS_KEY)
@@ -122,6 +126,7 @@ function Setting() {
       try {
         if (!useMock) {
           const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings`)
+          // global thresholds => no device_id query
           const res = await fetch(url, { method: "GET" })
           if (!res.ok) throw new Error(`GET /settings ${res.status}`)
           const json = await res.json()
@@ -158,12 +163,15 @@ function Setting() {
   }
 
   /** ---------- Validation ---------- */
-  function validateAndCollect() {
+  function validateAndCollectRecipients() {
     const recipients = (recipientsInput || "").trim() ? parseRecipients(recipientsInput) : []
     for (const r of recipients) {
       if (!isEmailish(r)) throw new Error(`อีเมลไม่ถูกต้อง: ${r}`)
     }
+    return recipients
+  }
 
+  function validateMetrics() {
     for (const m of METRICS_CONFIG) {
       const { min, max } = metrics[m.fe] || {}
       if (!(Number.isFinite(min) && Number.isFinite(max))) {
@@ -173,32 +181,55 @@ function Setting() {
         throw new Error(`ค่า "ต่ำสุด" ต้องน้อยกว่า "สูงสุด" (${m.label})`)
       }
     }
-
-    return { recipients }
   }
 
-  /** ---------- Actions ---------- */
+  /** ---------- API actions ---------- */
+  async function putSettingsThresholds() {
+    const payload = feToSettingsPayload(metrics)
+    const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) throw new Error(`PUT /settings ${res.status}`)
+    const json = await res.json()
+    const form = responseToForm(json)
+    setMetrics(form.metrics)
+  }
+
+  async function addSubscribers(emails) {
+    if (!emails?.length) return
+    const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings/subscribers/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device_id: DEVICE_ID, emails }),
+    })
+    if (!res.ok) throw new Error(`POST /settings/subscribers/add ${res.status}`)
+    // no need to use response body; backend returns the list of subscriptions
+  }
+
+  /** ---------- Actions (buttons) ---------- */
   async function saveSettings() {
     setSaving(true)
     setError("")
     setOk("")
     try {
-      const { recipients } = validateAndCollect()
+      validateMetrics()
+      const recipients = validateAndCollectRecipients()
+
       if (!useMock) {
-        const payload = feToPayload(recipients, metrics)
-        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-        if (!res.ok) throw new Error(`PUT /settings ${res.status}`)
-        const json = await res.json()
-        const form = responseToForm(json)
-        setRecipientsInput("")            // หลังบันทึกก็ยังว่าง
-        setMetrics(form.metrics)
+        // 1) Save thresholds (global)
+        await putSettingsThresholds()
+        // 2) Add subscribers for this DEVICE_ID
+        if (recipients.length) await addSubscribers(recipients)
       } else {
+        // mock local store
         saveLocal({ recipientsInput, metrics })
+        console.log("[MOCK] saved thresholds; added subscribers:", recipients)
       }
+
+      // clear email input after successful save
+      setRecipientsInput("")
       setOk("บันทึกการตั้งค่าสำเร็จ")
     } catch (e) {
       console.error(e)
@@ -241,24 +272,26 @@ function Setting() {
     setError("")
     setOk("")
     try {
-      const { recipients } = validateAndCollect()
-
+      // Validate & stage emails into subscribers first
+      const recipients = validateAndCollectRecipients()
       if (!useMock) {
-        // Persist current settings first so backend has fresh subscribers
-        const payload = feToPayload(recipients, metrics)
-        const resPut = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        })
-        if (!resPut.ok) throw new Error(`PUT /settings ${resPut.status}`)
+        // keep thresholds in sync (in case changed)
+        validateMetrics()
+        await putSettingsThresholds()
+        if (recipients.length) await addSubscribers(recipients)
 
-        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings/send-test`, { method: "POST" })
+        // trigger test ONLY for this DEVICE_ID
+        const res = await fetch(
+          `${API_BASE.replace(/\/$/, "")}/settings/send-test?device_id=${encodeURIComponent(DEVICE_ID)}`,
+          { method: "POST" }
+        )
         if (!res.ok) throw new Error(`POST /settings/send-test ${res.status}`)
       } else {
-        await new Promise((r) => setTimeout(r, 600))
-        console.log("[MOCK] send test to:", recipients)
+        await new Promise((r) => setTimeout(r, 500))
+        console.log("[MOCK] send test to (DEVICE_ID=%s):", DEVICE_ID, recipients)
       }
+
+      setRecipientsInput("") // clear after test
       setOk("ส่งอีเมลทดสอบแล้ว")
     } catch (e) {
       console.error(e)
@@ -286,9 +319,12 @@ function Setting() {
         <div className="text-sm text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
       </div>
 
-      {/* Recipients */}
+      {/* Recipients (SubscriberIn via /subscribers/add) */}
       <div className={`${cardCls} mb-6`}>
-        <div className="mb-2 text-base font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
+        <div className="mb-1 flex items-center justify-between">
+          <div className="text-base font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">Device ID: <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-gray-800">{DEVICE_ID}</code></div>
+        </div>
         <input
           type="text"
           className={inputCls}
@@ -296,7 +332,10 @@ function Setting() {
           value={recipientsInput}
           onChange={(e) => setRecipientsInput(e.target.value)}
         />
-        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">คั่นด้วยเครื่องหมายจุลภาค (,), เว้นวรรค หรือขึ้นบรรทัดใหม่ก็ได้</div>
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          คั่นด้วยเครื่องหมายจุลภาค (,), เว้นวรรค หรือขึ้นบรรทัดใหม่ก็ได้ • เมื่อกด “บันทึกการตั้งค่า” หรือ “ส่งอีเมลทดสอบ”
+          ระบบจะเพิ่มอีเมลเหล่านี้เข้า Subscribers ของอุปกรณ์ {DEVICE_ID}
+        </div>
       </div>
 
       {/* Metrics */}
