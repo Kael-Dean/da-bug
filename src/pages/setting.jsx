@@ -1,38 +1,50 @@
-// src/pages/setting.jsx
+// src/pages/setting.jsx — integrates with FastAPI `/settings`
+// - Reads/writes alert thresholds per device
+// - Syncs notify emails to backend subscribers
+// - Can reset to recommended + send test email
+// - Export default Setting (single-file component)
+
 import { useEffect, useMemo, useState } from "react"
 
 /** ---------- ENV ---------- */
 const API_BASE = import.meta.env.VITE_API_BASE || ""
 
-/** ---------- CONFIG: 4 ค่าน้ำ (ปรับช่วงได้ตามหน้างาน) ---------- */
+/**
+ * FE metric keys (UI)  ↔  BE field names
+ * - FE uses 4 cards: temp, turbidity, salinity, level
+ * - BE expects: temperature, turbidity, salinity, water_level
+ */
 const METRICS_CONFIG = [
-  { key: "temp",      label: "อุณหภูมิ", unit: "°C",  goodMin: 24,  goodMax: 30,  hint: "ช่วงเหมาะสม 24–30°C" },
-  { key: "turbidity", label: "ความขุ่น", unit: "NTU", goodMin: 0,   goodMax: 50,  hint: "ควรไม่ขุ่นมากกว่า ~50 NTU" },
-  { key: "salinity",  label: "ความเค็ม", unit: "ppt", goodMin: 0,   goodMax: 1,   hint: "น้ำจืดควรต่ำมาก < 1 ppt" },
-  { key: "level",     label: "ระดับน้ำ", unit: "cm",  goodMin: 10,  goodMax: 25,  hint: "ปรับตามความสูงบ่อเลี้ยงจริง" },
+  { fe: "temp",        be: "temperature", label: "อุณหภูมิ", unit: "°C",  goodMin: 24,  goodMax: 30, hint: "ช่วงเหมาะสม 24–30°C" },
+  { fe: "turbidity",   be: "turbidity",   label: "ความขุ่น", unit: "NTU", goodMin: 0,   goodMax: 50, hint: "ควรไม่ขุ่นมากกว่า ~50 NTU" },
+  { fe: "salinity",    be: "salinity",    label: "ความเค็ม", unit: "ppt", goodMin: 0,   goodMax: 1,  hint: "น้ำจืดควรต่ำมาก < 1 ppt" },
+  { fe: "level",       be: "water_level", label: "ระดับน้ำ", unit: "cm",  goodMin: 10,  goodMax: 25, hint: "ปรับตามความสูงบ่อเลี้ยงจริง" },
 ]
 
-/**
- * Backend Spec (แนะนำ)
- * GET  ${API_BASE}/sensor/settings
- *    -> { recipients: string[], metrics: { [key]: { min:number, max:number, enabled:boolean } } }
- * PUT  ${API_BASE}/sensor/settings
- * POST ${API_BASE}/sensor/settings/test-email
- * ถ้ายังไม่มี API: ใช้ localStorage คีย์ "water_alert_settings"
- */
-const LS_KEY = "water_alert_settings"
+const FE_KEYS = METRICS_CONFIG.map((m) => m.fe)
+const BE_BY_FE = METRICS_CONFIG.reduce((acc, m) => { acc[m.fe] = m.be; return acc }, {})
+const FE_BY_BE = METRICS_CONFIG.reduce((acc, m) => { acc[m.be] = m.fe; return acc }, {})
 
-function defaultSettings() {
-  const metrics = {}
+/** ---------- Local helpers ---------- */
+function defaultMetrics() {
+  const out = {}
   METRICS_CONFIG.forEach((m) => {
-    metrics[m.key] = { min: m.goodMin, max: m.goodMax, enabled: true }
+    out[m.fe] = { min: m.goodMin, max: m.goodMax, enabled: true }
   })
-  return { recipients: [], metrics }
+  return out
+}
+
+function defaultForm() {
+  return {
+    deviceId: "",
+    recipientsInput: "",
+    metrics: defaultMetrics(),
+  }
 }
 
 function parseRecipients(input) {
   return (input || "")
-    .split(/[, \n;]+/g)
+    .split(/[\n,;\s]+/g)
     .map((s) => s.trim())
     .filter(Boolean)
 }
@@ -45,6 +57,60 @@ function toDisplayRecipients(arr) {
   return (arr || []).join(", ")
 }
 
+/** ---------- API shape mapping ---------- */
+function feToPayload(deviceId, recipients, feMetrics) {
+  const payload = {
+    device_id: deviceId || null,
+    notify_emails: recipients, // Backend accepts list or CSV string; list is fine
+  }
+  // Map each card → backend field
+  for (const m of METRICS_CONFIG) {
+    const v = feMetrics[m.fe] || { min: m.goodMin, max: m.goodMax, enabled: true }
+    payload[m.be] = {
+      enabled: !!v.enabled,
+      min: Number(v.min),
+      max: Number(v.max),
+    }
+  }
+  return payload
+}
+
+function responseToForm(json, curDeviceId) {
+  // json is SettingsOut from backend
+  const recipients = Array.isArray(json?.notify_emails) ? json.notify_emails : []
+  const feMetrics = defaultMetrics()
+  for (const [beKey, val] of Object.entries(json || {})) {
+    const feKey = FE_BY_BE[beKey]
+    if (feKey && val && typeof val === "object") {
+      feMetrics[feKey] = {
+        enabled: !!val.enabled,
+        min: Number(val.min),
+        max: Number(val.max),
+      }
+    }
+  }
+  return {
+    deviceId: json?.device_id ?? curDeviceId ?? "",
+    recipientsInput: toDisplayRecipients(recipients),
+    metrics: feMetrics,
+  }
+}
+
+/**
+ * Optional: local fallback if API_BASE is missing in dev
+ */
+const LS_KEY = "water_alert_settings_v2"
+function loadLocal() {
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    return raw ? JSON.parse(raw) : defaultForm()
+  } catch { return defaultForm() }
+}
+function saveLocal(form) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(form)) } catch {}
+}
+
+/** ---------- Component ---------- */
 function Setting() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -52,189 +118,217 @@ function Setting() {
   const [error, setError] = useState("")
   const [ok, setOk] = useState("")
 
-  // ฟอร์ม
+  const [deviceId, setDeviceId] = useState("")
   const [recipientsInput, setRecipientsInput] = useState("")
-  const [metrics, setMetrics] = useState(defaultSettings().metrics)
+  const [metrics, setMetrics] = useState(defaultMetrics())
 
   const useMock = !API_BASE
 
-  /** ---------- Persist helper ---------- */
-  async function persist(settings, { silent = true } = {}) {
-    localStorage.setItem(LS_KEY, JSON.stringify(settings))
-    if (!useMock) {
+  /** ---------- Load on mount ---------- */
+  useEffect(() => {
+    ;(async () => {
+      setLoading(true)
+      setError("")
+      setOk("")
       try {
-        const res = await fetch(`${API_BASE}/sensor/settings`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(settings),
-        })
-        if (!res.ok) throw new Error(`Bad status ${res.status}`)
-        if (!silent) setOk("บันทึกสำเร็จ")
+        if (!useMock) {
+          // Try load without device first → if backend has a global row
+          const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings`)
+          // If you want to remember last device across sessions:
+          const last = sessionStorage.getItem("sensor_device_id") || ""
+          if (last) {
+            url.searchParams.set("device_id", last)
+            setDeviceId(last)
+          }
+          const res = await fetch(url, { method: "GET" })
+          if (!res.ok) throw new Error(`GET /settings ${res.status}`)
+          const json = await res.json()
+          const form = responseToForm(json, last)
+          setDeviceId(form.deviceId || last || "")
+          setRecipientsInput(form.recipientsInput)
+          setMetrics(form.metrics)
+        } else {
+          const local = loadLocal()
+          setDeviceId(local.deviceId || "")
+          setRecipientsInput(local.recipientsInput || "")
+          setMetrics(local.metrics || defaultMetrics())
+        }
       } catch (e) {
-        console.warn("Persist failed:", e)
-        if (!silent) setError("บันทึกไม่สำเร็จ")
+        console.error(e)
+        setError("โหลดการตั้งค่าไม่สำเร็จ ใช้ค่าแนะนำชั่วคราว")
+        const base = defaultForm()
+        setDeviceId(base.deviceId)
+        setRecipientsInput(base.recipientsInput)
+        setMetrics(base.metrics)
+      } finally {
+        setLoading(false)
       }
-    } else {
-      if (!silent) setOk("บันทึกสำเร็จ")
-    }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /** ---------- Derived ---------- */
+  const hasAnyEnabled = useMemo(
+    () => METRICS_CONFIG.some((m) => !!metrics[m.fe]?.enabled),
+    [metrics]
+  )
+
+  /** ---------- UI change handlers ---------- */
+  function updateMetric(feKey, patch) {
+    setMetrics((prev) => ({ ...prev, [feKey]: { ...prev[feKey], ...patch } }))
   }
 
-  /** ---------- โหลดค่า ---------- */
-  async function loadSettings() {
+  function onChangeDeviceId(v) {
+    setDeviceId(v)
+    sessionStorage.setItem("sensor_device_id", v)
+  }
+
+  /** ---------- Validation ---------- */
+  function validateAndCollect() {
+    const recipients = parseRecipients(recipientsInput)
+    for (const r of recipients) {
+      if (!isEmailish(r)) throw new Error(`อีเมลไม่ถูกต้อง: ${r}`)
+    }
+
+    for (const m of METRICS_CONFIG) {
+      const { min, max } = metrics[m.fe] || {}
+      if (!(Number.isFinite(min) && Number.isFinite(max))) {
+        throw new Error(`กรุณากรอกตัวเลขขั้นต่ำ/ขั้นสูงของ ${m.label}`)
+      }
+      if (Number(min) >= Number(max)) {
+        throw new Error(`ค่า "ต่ำสุด" ต้องน้อยกว่า "สูงสุด" (${m.label})`)
+      }
+    }
+
+    return { recipients }
+  }
+
+  /** ---------- Actions ---------- */
+  async function loadForDevice() {
     setLoading(true)
     setError("")
     setOk("")
     try {
       if (!useMock) {
-        const res = await fetch(`${API_BASE}/sensor/settings`)
-        if (!res.ok) throw new Error(`Bad status ${res.status}`)
+        const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
+        const res = await fetch(url, { method: "GET" })
+        if (!res.ok) throw new Error(`GET /settings ${res.status}`)
         const json = await res.json()
-        const base = defaultSettings()
-        const loaded = {
-          recipients: Array.isArray(json?.recipients) ? json.recipients : base.recipients,
-          metrics: { ...base.metrics, ...(json?.metrics || {}) },
-        }
-        setRecipientsInput(toDisplayRecipients(loaded.recipients))
-        setMetrics(loaded.metrics)
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput(form.recipientsInput)
+        setMetrics(form.metrics)
       } else {
-        const raw = localStorage.getItem(LS_KEY)
-        const obj = raw ? JSON.parse(raw) : defaultSettings()
-        setRecipientsInput(toDisplayRecipients(obj.recipients))
-        setMetrics(obj.metrics || defaultSettings().metrics)
+        const local = loadLocal()
+        setRecipientsInput(local.recipientsInput || "")
+        setMetrics(local.metrics || defaultMetrics())
       }
     } catch (e) {
       console.error(e)
-      setError("โหลดการตั้งค่าไม่สำเร็จ ใช้ค่าแนะนำไว้ชั่วคราว")
-      const base = defaultSettings()
-      setRecipientsInput(toDisplayRecipients(base.recipients))
-      setMetrics(base.metrics)
+      setError("โหลดการตั้งค่าไม่สำเร็จ")
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => {
-    loadSettings()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  /** ---------- บันทึก ---------- */
   async function saveSettings() {
     setSaving(true)
     setError("")
     setOk("")
-
-    const recipients = parseRecipients(recipientsInput)
-    for (const r of recipients) {
-      if (!isEmailish(r)) {
-        setSaving(false)
-        setError(`อีเมลไม่ถูกต้อง: ${r}`)
-        return
-      }
-    }
-
-    for (const m of METRICS_CONFIG) {
-      const { min, max } = metrics[m.key] || {}
-      if (!(Number.isFinite(min) && Number.isFinite(max))) {
-        setSaving(false)
-        setError(`กรุณากรอกตัวเลขขั้นต่ำ/ขั้นสูงของ ${m.label}`)
-        return
-      }
-      if (min >= max) {
-        setSaving(false)
-        setError(`ค่า "ต่ำสุด" ต้องน้อยกว่า "สูงสุด" (${m.label})`)
-        return
-      }
-    }
-
     try {
-      await persist({ recipients, metrics }, { silent: false })
+      const { recipients } = validateAndCollect()
+      if (!useMock) {
+        const payload = feToPayload(deviceId, recipients, metrics)
+        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) throw new Error(`PUT /settings ${res.status}`)
+        const json = await res.json()
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput(form.recipientsInput)
+        setMetrics(form.metrics)
+      } else {
+        saveLocal({ deviceId, recipientsInput, metrics })
+      }
+      setOk("บันทึกการตั้งค่าสำเร็จ")
+    } catch (e) {
+      console.error(e)
+      setError(e?.message || "บันทึกไม่สำเร็จ")
     } finally {
       setSaving(false)
     }
   }
 
-  /** ---------- ส่งอีเมลทดสอบ ---------- */
+  async function resetRecommended() {
+    setLoading(true)
+    setError("")
+    setOk("")
+    try {
+      if (!useMock) {
+        const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings/reset`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
+        const res = await fetch(url, { method: "POST" })
+        if (!res.ok) throw new Error(`POST /settings/reset ${res.status}`)
+        const json = await res.json()
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput(form.recipientsInput)
+        setMetrics(form.metrics)
+      } else {
+        const base = defaultForm()
+        setRecipientsInput(base.recipientsInput)
+        setMetrics(base.metrics)
+        saveLocal({ deviceId, recipientsInput: base.recipientsInput, metrics: base.metrics })
+      }
+      setOk("รีเซ็ตเป็นค่าแนะนำแล้ว")
+    } catch (e) {
+      console.error(e)
+      setError("รีเซ็ตไม่สำเร็จ")
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function sendTestEmail() {
     setTesting(true)
     setError("")
     setOk("")
-
-    const recipients = parseRecipients(recipientsInput)
-    if (recipients.length === 0) {
-      setTesting(false)
-      setError("กรุณากรอกอีเมลผู้รับอย่างน้อย 1 ราย")
-      return
-    }
-    for (const r of recipients) {
-      if (!isEmailish(r)) {
-        setTesting(false)
-        setError(`อีเมลไม่ถูกต้อง: ${r}`)
-        return
-      }
-    }
-
-    await persist({ recipients, metrics }, { silent: true })
-
-    const sample = {}
-    METRICS_CONFIG.forEach((m) => {
-      const { min, max, enabled } = metrics[m.key] || {}
-      if (enabled) {
-        const outLow = Math.random() < 0.5
-        sample[m.key] =
-          outLow ? Number(min) - 0.1 * Math.abs(min || 1) - 0.1 : Number(max) + 0.1 * Math.abs(max || 1) + 0.1
-      }
-    })
-
     try {
+      const { recipients } = validateAndCollect()
+
+      // Persist current settings first (so backend has fresh subscribers)
       if (!useMock) {
-        const res = await fetch(`${API_BASE}/sensor/settings/test-email`, {
-          method: "POST",
+        const payload = feToPayload(deviceId, recipients, metrics)
+        const resPut = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ recipients, sample }),
+          body: JSON.stringify(payload),
         })
-        if (!res.ok) throw new Error(`Bad status ${res.status}`)
+        if (!resPut.ok) throw new Error(`PUT /settings ${resPut.status}`)
+
+        const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings/send-test`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
+        const res = await fetch(url, { method: "POST" })
+        if (!res.ok) throw new Error(`POST /settings/send-test ${res.status}`)
       } else {
-        await new Promise((r) => setTimeout(r, 700))
-        console.log("[MOCK] send test email to:", recipients, "sample:", sample)
+        // Mock path
+        await new Promise((r) => setTimeout(r, 600))
+        console.log("[MOCK] send test to:", recipients)
       }
       setOk("ส่งอีเมลทดสอบแล้ว")
     } catch (e) {
       console.error(e)
-      setError("ส่งอีเมลทดสอบไม่สำเร็จ")
+      setError(e?.message || "ส่งอีเมลทดสอบไม่สำเร็จ")
     } finally {
       setTesting(false)
     }
   }
 
-  /** ---------- รีเซ็ตเป็นค่าแนะนำ ---------- */
-  function resetRecommended() {
-    const base = defaultSettings()
-    setMetrics(base.metrics)
-  }
-
-  /** ---------- จัดการอินพุต/สวิตช์ ---------- */
-  function updateMetric(key, patch) {
-    setMetrics((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }))
-  }
-
-  async function toggleEnabled(key, nextEnabled) {
-    setMetrics((prev) => {
-      const next = { ...prev, [key]: { ...prev[key], enabled: nextEnabled } }
-      const payload = { recipients: parseRecipients(recipientsInput), metrics: next }
-      persist(payload, { silent: true })
-      return next
-    })
-  }
-
-  const hasAnyEnabled = useMemo(
-    () => METRICS_CONFIG.some((m) => !!metrics[m.key]?.enabled),
-    [metrics]
-  )
-
   /** ---------- UI ---------- */
-  const btnBase =
-    "h-11 min-w-[180px] rounded-xl px-5 py-2 text-base inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
+  const cardCls = "rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900"
+  const inputCls = "w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+  const btnBase = "h-11 min-w-[170px] rounded-xl px-5 py-2 text-base inline-flex items-center justify-center active:scale-[0.99] disabled:opacity-60"
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
@@ -243,65 +337,64 @@ function Setting() {
         <div>
           <h1 className="text-2xl font-semibold text-emerald-600 dark:text-emerald-400">ตั้งค่าแจ้งเตือนค่าน้ำ</h1>
           <p className="mt-1 text-base text-gray-700 dark:text-gray-300">
-            กำหนดช่วงค่าที่ “ยอมรับได้” ของแต่ละตัวชี้วัด หากค่าเซ็นเซอร์ต่ำกว่า/สูงกว่าช่วงนี้ ระบบจะส่งอีเมลแจ้งเตือน
+            กำหนดช่วงค่าที่ “ยอมรับได้” ของแต่ละตัวชี้วัด ถ้าค่าจริงต่ำกว่า/สูงกว่าช่วงนี้ ระบบจะส่งอีเมลแจ้งเตือน
           </p>
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
       </div>
 
+      {/* Device selector */}
+      <div className={`${cardCls} mb-6`}>
+        <div className="mb-2 text-base font-semibold">อุปกรณ์ (Device ID)</div>
+        <input
+          type="text"
+          className={inputCls}
+          placeholder="เช่น ESP32-001 หรือเว้นว่างเพื่อใช้แถว global"
+          value={deviceId}
+          onChange={(e) => onChangeDeviceId(e.target.value)}
+          onBlur={loadForDevice}
+        />
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">เปลี่ยนรหัสแล้วกดนอกช่องเพื่อโหลดค่าของอุปกรณ์นั้น</div>
+      </div>
+
       {/* Recipients */}
-      <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+      <div className={`${cardCls} mb-6`}>
         <div className="mb-2 text-base font-semibold">ผู้รับอีเมลแจ้งเตือน</div>
         <input
           type="text"
-          className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+          className={inputCls}
           placeholder="กรอกอีเมลคั่นด้วยเครื่องหมายจุลภาค เช่น you@example.com, staff@farm.co"
           value={recipientsInput}
           onChange={(e) => setRecipientsInput(e.target.value)}
         />
-        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          คั่นด้วยเครื่องหมายจุลภาค (,), เว้นวรรค หรือขึ้นบรรทัดใหม่ก็ได้
-        </div>
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">คั่นด้วยเครื่องหมายจุลภาค (,), เว้นวรรค หรือขึ้นบรรทัดใหม่ก็ได้</div>
       </div>
 
       {/* Metrics */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {METRICS_CONFIG.map((m) => {
-          const v = metrics[m.key] || { min: m.goodMin, max: m.goodMax, enabled: true }
+          const v = metrics[m.fe] || { min: m.goodMin, max: m.goodMax, enabled: true }
           const enabled = !!v.enabled
           return (
-            <div
-              key={m.key}
-              className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900"
-            >
+            <div key={m.fe} className={cardCls}>
               <div className="mb-4 flex items-start justify-between gap-4">
                 <div>
                   <div className="text-base font-semibold">{m.label}</div>
                   <div className="text-sm text-gray-500 dark:text-gray-400">{m.hint}</div>
                 </div>
-
-                {/* เฉพาะสวิตช์ + สถานะ (เอาข้อความ "เปิดการแจ้งเตือน" ออก) */}
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     role="switch"
                     aria-checked={enabled}
                     aria-label="สวิตช์เปิด/ปิดการแจ้งเตือน"
-                    onClick={() => toggleEnabled(m.key, !enabled)}
-                    className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition ${
-                      enabled ? "bg-emerald-600" : "bg-gray-300 dark:bg-gray-700"
-                    }`}
+                    onClick={() => updateMetric(m.fe, { enabled: !enabled })}
+                    className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition ${enabled ? "bg-emerald-600" : "bg-gray-300 dark:bg-gray-700"}`}
                     title={enabled ? "ปิดการแจ้งเตือน" : "เปิดการแจ้งเตือน"}
                   >
-                    <span
-                      className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
-                        enabled ? "translate-x-6" : "translate-x-1"
-                      }`}
-                    />
+                    <span className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${enabled ? "translate-x-6" : "translate-x-1"}`} />
                   </button>
-                  <span className="text-xs text-gray-600 dark:text-gray-400">
-                    {enabled ? "เปิดอยู่" : "ปิดอยู่"}
-                  </span>
+                  <span className="text-xs text-gray-600 dark:text-gray-400">{enabled ? "เปิดอยู่" : "ปิดอยู่"}</span>
                 </div>
               </div>
 
@@ -313,8 +406,8 @@ function Setting() {
                       type="number"
                       step="any"
                       value={v.min}
-                      onChange={(e) => updateMetric(m.key, { min: Number(e.target.value) })}
-                      className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+                      onChange={(e) => updateMetric(m.fe, { min: e.target.value === "" ? "" : Number(e.target.value) })}
+                      className={inputCls}
                     />
                     <span className="text-sm text-gray-500 dark:text-gray-400">{m.unit}</span>
                   </div>
@@ -326,29 +419,25 @@ function Setting() {
                       type="number"
                       step="any"
                       value={v.max}
-                      onChange={(e) => updateMetric(m.key, { max: Number(e.target.value) })}
-                      className="w-full rounded-lg border border-gray-300 bg-white p-3 text-base outline-none ring-emerald-400 focus:ring-2 dark:border-gray-700 dark:bg-gray-950"
+                      onChange={(e) => updateMetric(m.fe, { max: e.target.value === "" ? "" : Number(e.target.value) })}
+                      className={inputCls}
                     />
                     <span className="text-sm text-gray-500 dark:text-gray-400">{m.unit}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                คำแนะนำเดิม: {m.goodMin} – {m.goodMax} {m.unit}
-              </div>
+              <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">คำแนะนำเดิม: {m.goodMin} – {m.goodMax} {m.unit}</div>
             </div>
           )
         })}
       </div>
 
       {/* Actions */}
-      <div className="mt-6 rounded-2xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
+      <div className={`${cardCls} mt-6`}>
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
           <div className="text-sm text-gray-600 dark:text-gray-400 sm:mr-auto">
-            {hasAnyEnabled
-              ? "ระบบจะส่งอีเมลเมื่อค่าจริงต่ำกว่า/สูงกว่าช่วงที่ตั้งไว้"
-              : "คุณปิดแจ้งเตือนของทุกตัวชี้วัดอยู่ จะไม่มีการส่งอีเมล"}
+            {hasAnyEnabled ? "ระบบจะส่งอีเมลเมื่อค่าจริงต่ำกว่า/สูงกว่าช่วงที่ตั้งไว้" : "คุณปิดแจ้งเตือนของทุกตัวชี้วัดอยู่ จะไม่มีการส่งอีเมล"}
           </div>
 
           <button
@@ -378,16 +467,11 @@ function Setting() {
           </button>
         </div>
 
-        {/* Alerts */}
         {error && (
-          <div className="mt-3 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-900/20 dark:text-rose-200">
-            {error}
-          </div>
+          <div className="mt-3 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900/60 dark:bg-rose-900/20 dark:text-rose-200">{error}</div>
         )}
         {ok && (
-          <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-200">
-            {ok}
-          </div>
+          <div className="mt-3 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-900/20 dark:text-emerald-200">{ok}</div>
         )}
       </div>
     </div>
