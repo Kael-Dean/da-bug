@@ -1,5 +1,5 @@
 // src/pages/setting.jsx — integrates with FastAPI `/settings`
-// - Reads/writes alert thresholds (global)
+// - Reads/writes alert thresholds per device
 // - Syncs notify emails to backend subscribers
 // - Can reset to recommended + send test email
 // - Export default Setting (single-file component)
@@ -21,7 +21,9 @@ const METRICS_CONFIG = [
   { fe: "level",       be: "water_level", label: "ระดับน้ำ", unit: "cm",  goodMin: 10,  goodMax: 25, hint: "ปรับตามความสูงบ่อเลี้ยงจริง" },
 ]
 
-const FE_BY_BE = METRICS_CONFIG.reduce((acc, m) => { acc[m.be] = m.fe; return acc }, {})
+const FE_KEYS   = METRICS_CONFIG.map((m) => m.fe)
+const BE_BY_FE  = METRICS_CONFIG.reduce((acc, m) => { acc[m.fe] = m.be; return acc }, {})
+const FE_BY_BE  = METRICS_CONFIG.reduce((acc, m) => { acc[m.be] = m.fe; return acc }, {})
 
 /** ---------- Local helpers ---------- */
 function defaultMetrics() {
@@ -34,6 +36,7 @@ function defaultMetrics() {
 
 function defaultForm() {
   return {
+    deviceId: "",
     recipientsInput: "",
     metrics: defaultMetrics(),
   }
@@ -55,11 +58,12 @@ function toDisplayRecipients(arr) {
 }
 
 /** ---------- API shape mapping ---------- */
-function feToPayload(recipients, feMetrics) {
+function feToPayload(deviceId, recipients, feMetrics) {
   const payload = {
-    device_id: null,               // global (ไม่มีช่องกรอก Device ID แล้ว)
-    notify_emails: recipients,
+    device_id: deviceId || null,
+    notify_emails: recipients, // Backend accepts list or CSV string; list is fine
   }
+  // Map each card → backend field
   for (const m of METRICS_CONFIG) {
     const v = feMetrics[m.fe] || { min: m.goodMin, max: m.goodMax, enabled: true }
     payload[m.be] = {
@@ -71,7 +75,8 @@ function feToPayload(recipients, feMetrics) {
   return payload
 }
 
-function responseToForm(json) {
+function responseToForm(json, curDeviceId) {
+  // json is SettingsOut from backend
   const recipients = Array.isArray(json?.notify_emails) ? json.notify_emails : []
   const feMetrics = defaultMetrics()
   for (const [beKey, val] of Object.entries(json || {})) {
@@ -85,7 +90,8 @@ function responseToForm(json) {
     }
   }
   return {
-    recipientsInput: toDisplayRecipients(recipients), // value โชว์รายชื่อปัจจุบัน; placeholder เป็นข้อความคงที่
+    deviceId: json?.device_id ?? curDeviceId ?? "",
+    recipientsInput: "", // ← ช่องอีเมลปล่อยว่างเสมอ
     metrics: feMetrics,
   }
 }
@@ -106,14 +112,15 @@ function saveLocal(form) {
 
 /** ---------- Component ---------- */
 function Setting() {
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [error, setError] = useState("")
-  const [ok, setOk] = useState("")
+  const [loading, setLoading]   = useState(true)
+  const [saving, setSaving]     = useState(false)
+  const [testing, setTesting]   = useState(false)
+  const [error, setError]       = useState("")
+  const [ok, setOk]             = useState("")
 
+  const [deviceId, setDeviceId]         = useState("")
   const [recipientsInput, setRecipientsInput] = useState("")
-  const [metrics, setMetrics] = useState(defaultMetrics())
+  const [metrics, setMetrics]           = useState(defaultMetrics())
 
   const useMock = !API_BASE
 
@@ -125,23 +132,32 @@ function Setting() {
       setOk("")
       try {
         if (!useMock) {
+          // Try load without device first → if backend has a global row
           const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings`)
+          const last = sessionStorage.getItem("sensor_device_id") || ""
+          if (last) {
+            url.searchParams.set("device_id", last)
+            setDeviceId(last)
+          }
           const res = await fetch(url, { method: "GET" })
           if (!res.ok) throw new Error(`GET /settings ${res.status}`)
           const json = await res.json()
-          const form = responseToForm(json)
-          setRecipientsInput(form.recipientsInput)
+          const form = responseToForm(json, last)
+          setDeviceId(form.deviceId || last || "")
+          setRecipientsInput("")          // ← เวลาลงหน้า ให้ช่องอีเมลว่าง
           setMetrics(form.metrics)
         } else {
           const local = loadLocal()
-          setRecipientsInput(local.recipientsInput || "")
+          setDeviceId(local.deviceId || "")
+          setRecipientsInput("")          // ← ว่างเสมอแม้มีค่าจาก local
           setMetrics(local.metrics || defaultMetrics())
         }
       } catch (e) {
         console.error(e)
         setError("โหลดการตั้งค่าไม่สำเร็จ ใช้ค่าแนะนำชั่วคราว")
         const base = defaultForm()
-        setRecipientsInput(base.recipientsInput)
+        setDeviceId(base.deviceId)
+        setRecipientsInput("")            // ← ว่าง
         setMetrics(base.metrics)
       } finally {
         setLoading(false)
@@ -161,6 +177,11 @@ function Setting() {
     setMetrics((prev) => ({ ...prev, [feKey]: { ...prev[feKey], ...patch } }))
   }
 
+  function onChangeDeviceId(v) {
+    setDeviceId(v)
+    sessionStorage.setItem("sensor_device_id", v)
+  }
+
   /** ---------- Validation ---------- */
   function validateAndCollect() {
     const recipients = parseRecipients(recipientsInput)
@@ -174,7 +195,7 @@ function Setting() {
         throw new Error(`กรุณากรอกตัวเลขขั้นต่ำ/ขั้นสูงของ ${m.label}`)
       }
       if (Number(min) >= Number(max)) {
-        throw new Error(`ค่า "ต่ำสุด" ต้องน้อยกว่า "สูงสุด" (${ม.label})`)
+        throw new Error(`ค่า "ต่ำสุด" ต้องน้อยกว่า "สูงสุด" (${m.label})`)
       }
     }
 
@@ -182,6 +203,33 @@ function Setting() {
   }
 
   /** ---------- Actions ---------- */
+  async function loadForDevice() {
+    setLoading(true)
+    setError("")
+    setOk("")
+    try {
+      if (!useMock) {
+        const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
+        const res = await fetch(url, { method: "GET" })
+        if (!res.ok) throw new Error(`GET /settings ${res.status}`)
+        const json = await res.json()
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput("")            // ← โหลดของ device ใหม่ก็ยังว่าง
+        setMetrics(form.metrics)
+      } else {
+        const local = loadLocal()
+        setRecipientsInput("")            // ← ว่าง
+        setMetrics(local.metrics || defaultMetrics())
+      }
+    } catch (e) {
+      console.error(e)
+      setError("โหลดการตั้งค่าไม่สำเร็จ")
+    } finally {
+      setLoading(false)
+    }
+  }
+
   async function saveSettings() {
     setSaving(true)
     setError("")
@@ -189,7 +237,7 @@ function Setting() {
     try {
       const { recipients } = validateAndCollect()
       if (!useMock) {
-        const payload = feToPayload(recipients, metrics)
+        const payload = feToPayload(deviceId, recipients, metrics)
         const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -197,11 +245,11 @@ function Setting() {
         })
         if (!res.ok) throw new Error(`PUT /settings ${res.status}`)
         const json = await res.json()
-        const form = responseToForm(json)
-        setRecipientsInput(form.recipientsInput)
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput("")            // ← หลังบันทึกก็ยังว่าง
         setMetrics(form.metrics)
       } else {
-        saveLocal({ recipientsInput, metrics })
+        saveLocal({ deviceId, recipientsInput, metrics })
       }
       setOk("บันทึกการตั้งค่าสำเร็จ")
     } catch (e) {
@@ -219,17 +267,18 @@ function Setting() {
     try {
       if (!useMock) {
         const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings/reset`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
         const res = await fetch(url, { method: "POST" })
         if (!res.ok) throw new Error(`POST /settings/reset ${res.status}`)
         const json = await res.json()
-        const form = responseToForm(json)
-        setRecipientsInput(form.recipientsInput)
+        const form = responseToForm(json, deviceId)
+        setRecipientsInput("")            // ← ว่างเสมอ
         setMetrics(form.metrics)
       } else {
         const base = defaultForm()
-        setRecipientsInput(base.recipientsInput)
+        setRecipientsInput("")            // ← ว่าง
         setMetrics(base.metrics)
-        saveLocal({ recipientsInput: base.recipientsInput, metrics: base.metrics })
+        saveLocal({ deviceId, recipientsInput: "", metrics: base.metrics })
       }
       setOk("รีเซ็ตเป็นค่าแนะนำแล้ว")
     } catch (e) {
@@ -247,9 +296,9 @@ function Setting() {
     try {
       const { recipients } = validateAndCollect()
 
+      // Persist current settings first (so backend has fresh subscribers)
       if (!useMock) {
-        // Persist current settings first so backend has fresh subscribers
-        const payload = feToPayload(recipients, metrics)
+        const payload = feToPayload(deviceId, recipients, metrics)
         const resPut = await fetch(`${API_BASE.replace(/\/$/, "")}/settings`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -257,9 +306,12 @@ function Setting() {
         })
         if (!resPut.ok) throw new Error(`PUT /settings ${resPut.status}`)
 
-        const res = await fetch(`${API_BASE.replace(/\/$/, "")}/settings/send-test`, { method: "POST" })
+        const url = new URL(`${API_BASE.replace(/\/$/, "")}/settings/send-test`)
+        if (deviceId) url.searchParams.set("device_id", deviceId)
+        const res = await fetch(url, { method: "POST" })
         if (!res.ok) throw new Error(`POST /settings/send-test ${res.status}`)
       } else {
+        // Mock path
         await new Promise((r) => setTimeout(r, 600))
         console.log("[MOCK] send test to:", recipients)
       }
@@ -288,6 +340,20 @@ function Setting() {
           </p>
         </div>
         <div className="text-sm text-gray-500 dark:text-gray-400">{loading ? "กำลังโหลด..." : ""}</div>
+      </div>
+
+      {/* Device selector */}
+      <div className={`${cardCls} mb-6`}>
+        <div className="mb-2 text-base font-semibold">อุปกรณ์ (Device ID)</div>
+        <input
+          type="text"
+          className={inputCls}
+          placeholder="เช่น ESP32-001 หรือเว้นว่างเพื่อใช้แถว global"
+          value={deviceId}
+          onChange={(e) => onChangeDeviceId(e.target.value)}
+          onBlur={loadForDevice}
+        />
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">เปลี่ยนรหัสแล้วกดนอกช่องเพื่อโหลดค่าของอุปกรณ์นั้น</div>
       </div>
 
       {/* Recipients */}
